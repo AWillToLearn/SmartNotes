@@ -11,7 +11,7 @@ Codex - Coding 95%
 Gemini - API (gemini-1.5-flash, gemini-2.0-flash, gemini-2.5-pro)
 
 Other API: elevenlabs.io (Deprecated/Not Functioning)
-----------------------------_
+----------------------------
 # Mission Narrative 
 
 ## Problem:
