@@ -61,28 +61,44 @@
     <section id="aiSummaryTool" class="view">
       <h2>AI Summary</h2>
       <p class="sub">Upload a file or paste a URL (video/article/text) for Gemini summary generation.</p>
-      <div class="card">
-        <label class="input-row">Content URL
-          <input id="summarySourceUrl" type="url" placeholder="https://..." />
-        </label>
-        <label class="file-btn">Upload File
-          <input id="summarySourceFile" type="file" accept=".txt,.md,.pdf,.rtf,.csv,.json" hidden />
-        </label>
-        <div class="actions" style="margin-top:10px;">
-          <button id="summaryGenerate">Generate Summary</button>
-        </div>
-        <div id="summaryStatus" class="status">Provide a URL or upload a file.</div>
-        <div id="summaryOutput" class="quiz-output"></div>
-        <div id="summaryChatPanel" class="hidden" style="margin-top:10px;">
-          <h3>Ask Follow-Up Questions</h3>
-          <div id="summaryChatThread" class="quiz-output" style="max-height: 240px;"></div>
-          <label class="input-row" style="margin-top:8px;">Your Question
-            <input id="summaryChatInput" type="text" placeholder="Ask about this summary..." />
-          </label>
-          <div class="actions">
-            <button id="summaryChatSend">Send</button>
+      <div class="ai-summary-grid">
+        <aside class="panel left summary-sidebar">
+          <div class="panel-head">
+            <h3>Summary Docs</h3>
+            <div class="actions-inline">
+              <button id="summaryRenameDoc" type="button">Rename</button>
+              <button id="summaryNewDoc" type="button">New</button>
+            </div>
           </div>
-        </div>
+          <label class="input-row">Document
+            <select id="summaryDocSelect"></select>
+          </label>
+          <h3>Summary Source</h3>
+          <label class="input-row">Content URL
+            <input id="summarySourceUrl" type="url" placeholder="https://..." />
+          </label>
+          <label class="file-btn">Upload File
+            <input id="summarySourceFile" type="file" accept=".txt,.md,.pdf,.rtf,.csv,.json" hidden />
+          </label>
+          <div class="actions" style="margin-top:10px;">
+            <button id="summaryGenerate">Generate Summary</button>
+          </div>
+          <div id="summaryStatus" class="status">Provide a URL or upload a file.</div>
+        </aside>
+
+        <section class="panel summary-main">
+          <h3>Summary + Chat</h3>
+          <div id="summaryOutput" class="summary-output"></div>
+          <div id="summaryChatPanel" style="margin-top:10px;">
+            <div id="summaryChatThread" class="summary-chat-thread"></div>
+            <label class="input-row" style="margin-top:8px;">Your Question
+              <input id="summaryChatInput" type="text" placeholder="Ask about this summary..." />
+            </label>
+            <div class="actions">
+              <button id="summaryChatSend">Send</button>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -91,6 +107,16 @@
       <p class="sub">Upload a file or paste a URL (video/article/text) for Gemini quiz generation.</p>
       <div class="ai-quiz-grid">
         <aside class="panel left quiz-sidebar">
+          <div class="panel-head">
+            <h3>Quiz Docs</h3>
+            <div class="actions-inline">
+              <button id="quizRenameDoc" type="button">Rename</button>
+              <button id="quizNewDoc" type="button">New</button>
+            </div>
+          </div>
+          <label class="input-row">Document
+            <select id="quizDocSelect"></select>
+          </label>
           <h3>Quiz Source</h3>
           <label class="input-row">Content URL
             <input id="quizSourceUrl" type="url" placeholder="https://..." />
@@ -114,6 +140,16 @@
     <section id="workspace" class="view">
       <div class="workspace-grid">
         <aside class="panel left">
+          <div class="panel-head">
+            <h2>Workspace Docs</h2>
+            <div class="actions-inline">
+              <button id="workspaceRenameDoc" type="button">Rename</button>
+              <button id="workspaceNewDoc" type="button">New</button>
+            </div>
+          </div>
+          <label class="input-row">Document
+            <select id="workspaceDocSelect"></select>
+          </label>
           <h2>Sources</h2>
           <label class="input-row">Video URL
             <input id="videoUrl" type="url" placeholder="https://..." />
@@ -200,6 +236,16 @@
     <section id="textbook" class="view">
       <div class="textbook-grid">
         <aside class="panel left">
+          <div class="panel-head">
+            <h2>Textbook Docs</h2>
+            <div class="actions-inline">
+              <button id="textbookRenameDoc" type="button">Rename</button>
+              <button id="textbookNewDoc" type="button">New</button>
+            </div>
+          </div>
+          <label class="input-row">Document
+            <select id="textbookDocSelect"></select>
+          </label>
           <h2>Textbook</h2>
           <label class="file-btn">Import PDF
             <input id="textbookFile" type="file" accept="application/pdf" hidden />

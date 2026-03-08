@@ -11,11 +11,17 @@
   summaryChatThread: document.getElementById('summaryChatThread'),
   summaryChatInput: document.getElementById('summaryChatInput'),
   summaryChatSend: document.getElementById('summaryChatSend'),
+  summaryDocSelect: document.getElementById('summaryDocSelect'),
+  summaryNewDoc: document.getElementById('summaryNewDoc'),
+  summaryRenameDoc: document.getElementById('summaryRenameDoc'),
   quizSourceUrl: document.getElementById('quizSourceUrl'),
   quizSourceFile: document.getElementById('quizSourceFile'),
   quizGenerate: document.getElementById('quizGenerate'),
   quizStatus: document.getElementById('quizStatus'),
   quizToolOutput: document.getElementById('quizToolOutput'),
+  quizDocSelect: document.getElementById('quizDocSelect'),
+  quizNewDoc: document.getElementById('quizNewDoc'),
+  quizRenameDoc: document.getElementById('quizRenameDoc'),
   editor: document.getElementById('workspaceEditor'),
   keyPointList: document.getElementById('keyPointList'),
   aiStatus: document.getElementById('aiStatus'),
@@ -46,8 +52,14 @@
   themeToggle: document.getElementById('themeToggle'),
   darkModeToggle: document.getElementById('darkModeToggle'),
   publicLinkDefault: document.getElementById('publicLinkDefault'),
+  workspaceDocSelect: document.getElementById('workspaceDocSelect'),
+  workspaceNewDoc: document.getElementById('workspaceNewDoc'),
+  workspaceRenameDoc: document.getElementById('workspaceRenameDoc'),
   textbookFile: document.getElementById('textbookFile'),
   textbookName: document.getElementById('textbookName'),
+  textbookDocSelect: document.getElementById('textbookDocSelect'),
+  textbookNewDoc: document.getElementById('textbookNewDoc'),
+  textbookRenameDoc: document.getElementById('textbookRenameDoc'),
   chapterList: document.getElementById('chapterList'),
   pdfFrame: document.getElementById('pdfFrame'),
   textbookText: document.getElementById('textbookText'),
@@ -79,7 +91,8 @@ const STORAGE_KEYS = {
   SETTINGS: 'smartnotes.settings.v1',
   GARDEN: 'smartnotes.garden.v1',
   TEXTBOOK: 'smartnotes.textbook.v1',
-  CLIENT_ID: 'smartnotes.client_id.v1'
+  CLIENT_ID: 'smartnotes.client_id.v1',
+  FEATURE_DOCS: 'smartnotes.feature_docs.v1'
 };
 
 let autosaveTimer;
@@ -115,6 +128,11 @@ let summarySourceText = '';
 let summaryLatest = '';
 let summaryChatHistory = [];
 let aiQuizQuestions = [];
+let aiQuizLastState = null;
+let activeWorkspaceDocId = 'default';
+let activeTextbookDocId = 'default';
+let activeSummaryDocId = 'default';
+let activeQuizDocId = 'default';
 
 const shopItems = [
   { id: 'plant', label: 'Potted Plant', cost: 25 },
@@ -174,7 +192,372 @@ function applyTheme(themeName) {
   }
 }
 
+const FEATURE_LABELS = {
+  workspace: 'Workspace',
+  textbook: 'Textbook',
+  summary: 'Summary',
+  quiz: 'Quiz'
+};
+
+function getFeatureDocsStore() {
+  return loadJSON(STORAGE_KEYS.FEATURE_DOCS, {});
+}
+
+function saveFeatureDocsStore(store) {
+  saveJSON(STORAGE_KEYS.FEATURE_DOCS, store);
+}
+
+function ensureFeatureBucket(feature) {
+  const store = getFeatureDocsStore();
+  if (!store[feature]) {
+    let initialState = {};
+    if (feature === 'workspace') {
+      initialState = {
+        content: localStorage.getItem(STORAGE_KEYS.DOC) || '<h2>Untitled Workspace</h2><p>Drag key points here.</p>',
+        versions: loadJSON(STORAGE_KEYS.VERSIONS, []),
+        aiStatus: 'Idle',
+        videoUrl: '',
+        keyPoints: []
+      };
+    }
+    if (feature === 'textbook') {
+      const legacyTextbook = loadJSON(STORAGE_KEYS.TEXTBOOK, { name: 'Textbook 1' });
+      initialState = {
+        name: legacyTextbook.name || 'Textbook 1',
+        text: '',
+        status: 'No textbook loaded.',
+        outputHtml: ''
+      };
+    }
+    const now = new Date().toISOString();
+    store[feature] = {
+      activeId: 'default',
+      docs: {
+        default: {
+          id: 'default',
+          title: `${FEATURE_LABELS[feature] || 'Document'} 1`,
+          updatedAt: now,
+          state: initialState
+        }
+      }
+    };
+    saveFeatureDocsStore(store);
+  }
+  return store;
+}
+
+function listFeatureDocs(feature) {
+  const store = ensureFeatureBucket(feature);
+  const bucket = store[feature];
+  return Object.values(bucket.docs || {}).sort((a, b) =>
+    String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+  );
+}
+
+function createFeatureDoc(feature) {
+  const store = ensureFeatureBucket(feature);
+  const bucket = store[feature];
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const title = `${FEATURE_LABELS[feature] || 'Document'} ${Object.keys(bucket.docs || {}).length + 1}`;
+  bucket.docs[id] = { id, title, updatedAt: now, state: {} };
+  bucket.activeId = id;
+  saveFeatureDocsStore(store);
+  return id;
+}
+
+function getFeatureDoc(feature, docId) {
+  const store = ensureFeatureBucket(feature);
+  return store[feature]?.docs?.[docId] || null;
+}
+
+function getActiveFeatureDocId(feature) {
+  const store = ensureFeatureBucket(feature);
+  return store[feature]?.activeId || 'default';
+}
+
+function setActiveFeatureDocId(feature, docId) {
+  const store = ensureFeatureBucket(feature);
+  if (!store[feature]?.docs?.[docId]) return;
+  store[feature].activeId = docId;
+  saveFeatureDocsStore(store);
+}
+
+function renameFeatureDoc(feature, docId, newTitle) {
+  const nextTitle = String(newTitle || '').trim().slice(0, 80);
+  if (!nextTitle) return false;
+  const store = ensureFeatureBucket(feature);
+  const doc = store[feature]?.docs?.[docId];
+  if (!doc) return false;
+  doc.title = nextTitle;
+  doc.updatedAt = new Date().toISOString();
+  saveFeatureDocsStore(store);
+  return true;
+}
+
+function saveFeatureDocState(feature, docId, statePatch = {}) {
+  const store = ensureFeatureBucket(feature);
+  const bucket = store[feature];
+  if (!bucket.docs[docId]) {
+    bucket.docs[docId] = {
+      id: docId,
+      title: `${FEATURE_LABELS[feature] || 'Document'}`,
+      updatedAt: new Date().toISOString(),
+      state: {}
+    };
+  }
+  const current = bucket.docs[docId];
+  current.state = { ...(current.state || {}), ...(statePatch || {}) };
+  current.updatedAt = new Date().toISOString();
+  bucket.activeId = docId;
+  saveFeatureDocsStore(store);
+}
+
+function loadFeatureDocState(feature, docId) {
+  const doc = getFeatureDoc(feature, docId);
+  return doc?.state || {};
+}
+
+function populateDocSelect(selectEl, feature, activeId) {
+  if (!selectEl) return;
+  const docs = listFeatureDocs(feature);
+  selectEl.innerHTML = docs
+    .map((d) => `<option value="${d.id}">${d.title}</option>`)
+    .join('');
+  selectEl.value = activeId;
+}
+
+function serializeWorkspaceKeyPoints() {
+  return [...els.keyPointList.querySelectorAll('.drag-item')].map((li) => {
+    if (li.dataset.imageUrl) {
+      return {
+        type: 'screenshot',
+        imageUrl: li.dataset.imageUrl,
+        caption: li.dataset.caption || li.textContent || '',
+        timeSec: Number(li.dataset.timeSec || 0),
+        label: li.dataset.label || ''
+      };
+    }
+    const raw = String(li.textContent || '').trim();
+    const match = raw.match(/^\[(\d{2}:\d{2})\]\s*(.*)$/);
+    return {
+      type: 'text',
+      text: match ? match[2] : raw,
+      label: match ? match[1] : '',
+      timeSec: Number(li.dataset.timeSec || 0)
+    };
+  });
+}
+
+function makeWorkspaceTextSuggestion(item) {
+  const li = document.createElement('li');
+  li.className = 'drag-item';
+  li.draggable = true;
+  const label = item.label || formatTimeLabel(item.timeSec || 0);
+  const text = String(item.text || '').trim();
+  li.dataset.timeSec = String(Number(item.timeSec || 0));
+  li.textContent = label ? `[${label}] ${text}` : text;
+  li.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', li.textContent));
+  li.addEventListener('click', () => seekVideoTo(Number(item.timeSec || 0)));
+  return li;
+}
+
+function makeWorkspaceScreenshotSuggestion(item) {
+  const li = document.createElement('li');
+  li.className = 'drag-item';
+  li.draggable = true;
+  li.dataset.timeSec = String(Number(item.timeSec || 0));
+  li.dataset.imageUrl = item.imageUrl || '';
+  li.dataset.label = item.label || formatTimeLabel(item.timeSec || 0);
+  li.dataset.caption = item.caption || '';
+  const label = li.dataset.label || '00:00';
+  li.innerHTML = `<div><strong>[${label}] Screenshot suggestion</strong></div><img src="${item.imageUrl}" alt="suggested frame" style="width:100%;border-radius:8px;margin-top:6px;" /><div style="margin-top:6px;font-size:0.88rem;color:#4f4f4f;">${item.caption || ''}</div>`;
+  li.addEventListener('dragstart', (e) => {
+    const payload = {
+      type: 'screenshot',
+      imageUrl: item.imageUrl,
+      caption: li.dataset.caption
+    };
+    e.dataTransfer.setData('application/x-smartnotes-item', JSON.stringify(payload));
+    e.dataTransfer.setData('text/plain', li.dataset.caption || '');
+  });
+  li.addEventListener('click', () => seekVideoTo(Number(item.timeSec || 0)));
+  return li;
+}
+
+function applyWorkspaceKeyPoints(items) {
+  els.keyPointList.innerHTML = '';
+  const textTimed = [];
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (item?.type === 'screenshot' && item.imageUrl) {
+      els.keyPointList.appendChild(makeWorkspaceScreenshotSuggestion(item));
+      return;
+    }
+    const li = makeWorkspaceTextSuggestion(item || {});
+    els.keyPointList.appendChild(li);
+    if (Number(item?.timeSec || 0) >= 0) {
+      textTimed.push({
+        timeSec: Number(item.timeSec || 0),
+        label: item.label || formatTimeLabel(item.timeSec || 0),
+        text: String(item.text || '').trim()
+      });
+    }
+  });
+  timedKeyPoints = textTimed.filter((x) => x.text);
+  updateCurrentKeyPointIndicator();
+}
+
+function collectQuizSelections(outputEl) {
+  return aiQuizQuestions.map((_, idx) => {
+    const checked = outputEl.querySelector(`input[name="quiz-q-${idx}"]:checked`);
+    return checked ? Number(checked.value) : -1;
+  });
+}
+
+function applyQuizScoring(outputEl, selectedIdxs) {
+  [...outputEl.querySelectorAll('.quiz-option-label')].forEach((el) => {
+    el.classList.remove('correct', 'wrong');
+  });
+  let correct = 0;
+  aiQuizQuestions.forEach((q, idx) => {
+    const pickedIdx = Number(selectedIdxs[idx] ?? -1);
+    const answerIdx = q.options.findIndex((o) => o === q.answer);
+    const pickedLabel = outputEl.querySelector(
+      `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${pickedIdx}"]`
+    );
+    const answerLabel = outputEl.querySelector(
+      `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${answerIdx}"]`
+    );
+    if (answerLabel) answerLabel.classList.add('correct');
+    if (pickedIdx !== answerIdx && pickedLabel) pickedLabel.classList.add('wrong');
+    if (pickedIdx === answerIdx) correct += 1;
+  });
+  const total = aiQuizQuestions.length || 1;
+  const pct = Math.round((correct / total) * 100);
+  return { correct, total: aiQuizQuestions.length, pct };
+}
+
+function captureWorkspaceState() {
+  return {
+    content: els.editor.innerHTML,
+    versions: loadJSON(STORAGE_KEYS.VERSIONS, []),
+    aiStatus: els.aiStatus.textContent,
+    videoUrl: els.videoUrl.value || '',
+    keyPoints: serializeWorkspaceKeyPoints()
+  };
+}
+
+function applyWorkspaceState(state = {}) {
+  els.editor.innerHTML = state.content || '<h2>Untitled Workspace</h2><p>Drag key points here.</p>';
+  localStorage.setItem(STORAGE_KEYS.DOC, els.editor.innerHTML);
+  saveJSON(STORAGE_KEYS.VERSIONS, Array.isArray(state.versions) ? state.versions : []);
+  els.aiStatus.textContent = state.aiStatus || 'Idle';
+  els.videoUrl.value = state.videoUrl || '';
+  applyWorkspaceKeyPoints(state.keyPoints || []);
+  updateEditorPageSizing();
+  renderVersions();
+}
+
+function captureTextbookState() {
+  return {
+    name: els.textbookName.value || '',
+    text: els.textbookText.value || '',
+    status: els.textbookStatus.textContent || '',
+    outputHtml: els.quizOutput.innerHTML || ''
+  };
+}
+
+function applyTextbookState(state = {}) {
+  els.textbookName.value = state.name || 'Textbook 1';
+  els.textbookText.value = state.text || '';
+  saveJSON(STORAGE_KEYS.TEXTBOOK, { name: els.textbookName.value });
+  populateChapterListLegacy(els.textbookText.value || '');
+  els.textbookStatus.textContent = state.status || 'No textbook loaded.';
+  els.quizOutput.innerHTML = state.outputHtml || '';
+}
+
+function captureSummaryState() {
+  return {
+    url: els.summarySourceUrl.value || '',
+    status: els.summaryStatus.textContent || '',
+    outputHtml: els.summaryOutput.innerHTML || '',
+    summarySourceText,
+    summaryLatest,
+    summaryChatHistory: summaryChatHistory.slice(0, 100)
+  };
+}
+
+function applySummaryState(state = {}) {
+  els.summarySourceUrl.value = state.url || '';
+  els.summaryStatus.textContent = state.status || 'Provide a URL or upload a file.';
+  els.summaryOutput.innerHTML = state.outputHtml || '';
+  summarySourceText = state.summarySourceText || '';
+  summaryLatest = state.summaryLatest || '';
+  summaryChatHistory = Array.isArray(state.summaryChatHistory) ? state.summaryChatHistory : [];
+  renderSummaryChatThread();
+}
+
+function captureQuizState() {
+  const selectedIdxs = els.quizToolOutput ? collectQuizSelections(els.quizToolOutput) : [];
+  const last = aiQuizLastState || {};
+  return {
+    url: els.quizSourceUrl.value || '',
+    status: els.quizStatus.textContent || '',
+    questions: aiQuizQuestions,
+    lastState: {
+      submitted: !!last.submitted,
+      selectedIdxs,
+      scoreText: last.scoreText || ''
+    }
+  };
+}
+
+function applyQuizState(state = {}) {
+  els.quizSourceUrl.value = state.url || '';
+  els.quizStatus.textContent = state.status || 'Provide a URL or upload a file.';
+  aiQuizLastState = state.lastState || null;
+  if (Array.isArray(state.questions) && state.questions.length) {
+    renderAiQuizSet(state.questions, els.quizToolOutput, aiQuizLastState);
+  } else {
+    aiQuizQuestions = [];
+    els.quizToolOutput.innerHTML = '';
+  }
+}
+
+function saveActiveFeatureState(feature) {
+  if (feature === 'workspace') {
+    saveFeatureDocState(feature, activeWorkspaceDocId, captureWorkspaceState());
+  } else if (feature === 'textbook') {
+    saveFeatureDocState(feature, activeTextbookDocId, captureTextbookState());
+  } else if (feature === 'summary') {
+    saveFeatureDocState(feature, activeSummaryDocId, captureSummaryState());
+  } else if (feature === 'quiz') {
+    saveFeatureDocState(feature, activeQuizDocId, captureQuizState());
+  }
+}
+
+function loadActiveFeatureState(feature, docId) {
+  const state = loadFeatureDocState(feature, docId);
+  if (feature === 'workspace') {
+    activeWorkspaceDocId = docId;
+    applyWorkspaceState(state);
+  } else if (feature === 'textbook') {
+    activeTextbookDocId = docId;
+    applyTextbookState(state);
+  } else if (feature === 'summary') {
+    activeSummaryDocId = docId;
+    applySummaryState(state);
+  } else if (feature === 'quiz') {
+    activeQuizDocId = docId;
+    applyQuizState(state);
+  }
+}
+
 function setView(id) {
+  saveActiveFeatureState('workspace');
+  saveActiveFeatureState('textbook');
+  saveActiveFeatureState('summary');
+  saveActiveFeatureState('quiz');
   els.navBtns.forEach((b) => b.classList.toggle('active', b.dataset.view === id));
   els.views.forEach((v) => v.classList.toggle('active', v.id === id));
 }
@@ -240,6 +623,7 @@ function renderTimedKeyPoints(points) {
     els.keyPointList.appendChild(li);
   });
   updateCurrentKeyPointIndicator();
+  saveActiveFeatureState('workspace');
 }
 
 function formatTimeLabel(sec) {
@@ -270,6 +654,7 @@ function appendScreenshotSuggestions(items) {
     li.addEventListener('click', () => seekVideoTo(Number(item.timeSec || 0)));
     els.keyPointList.appendChild(li);
   });
+  saveActiveFeatureState('workspace');
 }
 
 async function captureFrameAt(timeSec) {
@@ -491,6 +876,7 @@ function seedKeyPoints(input) {
     els.keyPointList.appendChild(li);
   });
   updateCurrentKeyPointIndicator();
+  saveActiveFeatureState('workspace');
 }
 
 async function apiPost(path, payload) {
@@ -807,13 +1193,16 @@ function saveDoc(versionLabel = 'autosave') {
   saveJSON(STORAGE_KEYS.VERSIONS, versions.slice(0, 20));
   els.saveState.textContent = `Saved ${new Date().toLocaleTimeString()}`;
   updateEditorPageSizing();
+  saveFeatureDocState('workspace', activeWorkspaceDocId, captureWorkspaceState());
+  populateDocSelect(els.workspaceDocSelect, 'workspace', activeWorkspaceDocId);
   syncWorkspaceState();
 }
 
 function syncWorkspaceState() {
+  saveFeatureDocState('workspace', activeWorkspaceDocId, captureWorkspaceState());
   const payload = {
     clientId: getClientId(),
-    docId: 'default',
+    docId: activeWorkspaceDocId || 'default',
     state: {
       content: els.editor.innerHTML,
       versions: loadJSON(STORAGE_KEYS.VERSIONS, []),
@@ -826,9 +1215,10 @@ function syncWorkspaceState() {
 }
 
 function syncTextbookState() {
+  saveFeatureDocState('textbook', activeTextbookDocId, captureTextbookState());
   const payload = {
     clientId: getClientId(),
-    docId: 'default',
+    docId: activeTextbookDocId || 'default',
     state: {
       name: els.textbookName.value,
       text: els.textbookText.value
@@ -842,7 +1232,9 @@ function syncTextbookState() {
 async function hydrateRemoteState() {
   const clientId = encodeURIComponent(getClientId());
   try {
-    const workspace = await apiGet(`/state/workspace?clientId=${clientId}&docId=default`);
+    const workspace = await apiGet(
+      `/state/workspace?clientId=${clientId}&docId=${encodeURIComponent(activeWorkspaceDocId || 'default')}`
+    );
     if (workspace?.state) {
       if (workspace.state.content) {
         els.editor.innerHTML = workspace.state.content;
@@ -856,13 +1248,17 @@ async function hydrateRemoteState() {
         els.publicLinkDefault.checked = !!merged.publicByDefault;
         applyTheme(merged.theme);
       }
+      saveFeatureDocState('workspace', activeWorkspaceDocId, captureWorkspaceState());
+      populateDocSelect(els.workspaceDocSelect, 'workspace', activeWorkspaceDocId);
     }
   } catch {
     // Local state remains source of truth when remote load fails.
   }
 
   try {
-    const textbook = await apiGet(`/state/textbook?clientId=${clientId}&docId=default`);
+    const textbook = await apiGet(
+      `/state/textbook?clientId=${clientId}&docId=${encodeURIComponent(activeTextbookDocId || 'default')}`
+    );
     if (textbook?.state) {
       if (textbook.state.name) {
         els.textbookName.value = textbook.state.name;
@@ -872,6 +1268,8 @@ async function hydrateRemoteState() {
         els.textbookText.value = textbook.state.text;
         populateChapterList(textbook.state.text);
       }
+      saveFeatureDocState('textbook', activeTextbookDocId, captureTextbookState());
+      populateDocSelect(els.textbookDocSelect, 'textbook', activeTextbookDocId);
     }
   } catch {
     // Local fallback.
@@ -1798,9 +2196,10 @@ function renderAiQuiz(quiz, outputEl) {
   });
 }
 
-function renderAiQuizSet(questions, outputEl) {
+function renderAiQuizSet(questions, outputEl, restoreState = null) {
   if (!outputEl) return;
   aiQuizQuestions = Array.isArray(questions) ? questions : [];
+  aiQuizLastState = restoreState || { submitted: false, selectedIdxs: [] };
   if (!aiQuizQuestions.length) {
     outputEl.textContent = 'Quiz could not be generated.';
     return;
@@ -1830,44 +2229,37 @@ function renderAiQuizSet(questions, outputEl) {
   outputEl.appendChild(submitWrap);
   const submitBtn = outputEl.querySelector('#quizScoreSubmit');
   const resultEl = outputEl.querySelector('#quizScoreResult');
+  const applyRestore = () => {
+    const selectedIdxs = Array.isArray(aiQuizLastState?.selectedIdxs) ? aiQuizLastState.selectedIdxs : [];
+    selectedIdxs.forEach((idx, qIdx) => {
+      const radio = outputEl.querySelector(`input[name="quiz-q-${qIdx}"][value="${idx}"]`);
+      if (radio) radio.checked = true;
+    });
+    if (aiQuizLastState?.submitted) {
+      const score = applyQuizScoring(outputEl, selectedIdxs);
+      resultEl.textContent = aiQuizLastState.scoreText || `Score: ${score.correct}/${score.total} (${score.pct}%)`;
+    }
+  };
   if (submitBtn && resultEl) {
     submitBtn.addEventListener('click', () => {
-      const selected = aiQuizQuestions.map((q, idx) => {
-        const checked = outputEl.querySelector(`input[name="quiz-q-${idx}"]:checked`);
-        if (!checked) return { optIdx: -1, value: '' };
-        const optIdx = Number(checked.value);
-        const value = q.options[optIdx] || '';
-        return { optIdx, value };
-      });
-      const unanswered = selected.filter((x) => x.optIdx < 0).length;
+      const selectedIdxs = collectQuizSelections(outputEl);
+      const unanswered = selectedIdxs.filter((x) => x < 0).length;
       if (unanswered) {
         resultEl.textContent = `Please answer all questions (${unanswered} remaining).`;
         return;
       }
-
-      [...outputEl.querySelectorAll('.quiz-option-label')].forEach((el) => {
-        el.classList.remove('correct', 'wrong');
-      });
-
-      let correct = 0;
-      aiQuizQuestions.forEach((q, idx) => {
-        const picked = selected[idx];
-        const answerIdx = q.options.findIndex((o) => o === q.answer);
-        const pickedLabel = outputEl.querySelector(
-          `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${picked.optIdx}"]`
-        );
-        const answerLabel = outputEl.querySelector(
-          `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${answerIdx}"]`
-        );
-
-        if (answerLabel) answerLabel.classList.add('correct');
-        if (picked.optIdx !== answerIdx && pickedLabel) pickedLabel.classList.add('wrong');
-        if (picked.value === q.answer) correct += 1;
-      });
-      const pct = Math.round((correct / aiQuizQuestions.length) * 100);
-      resultEl.textContent = `Score: ${correct}/${aiQuizQuestions.length} (${pct}%)`;
-      awardXP(Math.max(5, correct), 'quiz completed');
+      const score = applyQuizScoring(outputEl, selectedIdxs);
+      const scoreText = `Score: ${score.correct}/${score.total} (${score.pct}%)`;
+      resultEl.textContent = scoreText;
+      aiQuizLastState = {
+        submitted: true,
+        selectedIdxs,
+        scoreText
+      };
+      saveActiveFeatureState('quiz');
+      awardXP(Math.max(5, score.correct), 'quiz completed');
     });
+    applyRestore();
   }
 }
 
@@ -1927,7 +2319,90 @@ function renderSummaryChatThread() {
   els.summaryChatThread.scrollTop = els.summaryChatThread.scrollHeight;
 }
 
+function bindFeatureDocControls({ feature, selectEl, newBtnEl, renameBtnEl, onSwitch }) {
+  if (!selectEl || !newBtnEl) return;
+  selectEl.addEventListener('change', () => {
+    saveActiveFeatureState(feature);
+    const nextId = selectEl.value;
+    setActiveFeatureDocId(feature, nextId);
+    loadActiveFeatureState(feature, nextId);
+    if (typeof onSwitch === 'function') onSwitch();
+    populateDocSelect(selectEl, feature, nextId);
+  });
+  newBtnEl.addEventListener('click', () => {
+    saveActiveFeatureState(feature);
+    const newId = createFeatureDoc(feature);
+    setActiveFeatureDocId(feature, newId);
+    loadActiveFeatureState(feature, newId);
+    if (typeof onSwitch === 'function') onSwitch();
+    populateDocSelect(selectEl, feature, newId);
+  });
+
+  if (renameBtnEl) {
+    renameBtnEl.addEventListener('click', () => {
+      const activeId = getActiveFeatureDocId(feature);
+      const current = getFeatureDoc(feature, activeId);
+      if (!current) return;
+      const next = prompt('New document title:', current.title || '');
+      if (next === null) return;
+      if (!renameFeatureDoc(feature, activeId, next)) return;
+      populateDocSelect(selectEl, feature, activeId);
+    });
+  }
+}
+
+function initFeatureDocManagers() {
+  ensureFeatureBucket('workspace');
+  ensureFeatureBucket('textbook');
+  ensureFeatureBucket('summary');
+  ensureFeatureBucket('quiz');
+
+  activeWorkspaceDocId = getActiveFeatureDocId('workspace');
+  activeTextbookDocId = getActiveFeatureDocId('textbook');
+  activeSummaryDocId = getActiveFeatureDocId('summary');
+  activeQuizDocId = getActiveFeatureDocId('quiz');
+
+  populateDocSelect(els.workspaceDocSelect, 'workspace', activeWorkspaceDocId);
+  populateDocSelect(els.textbookDocSelect, 'textbook', activeTextbookDocId);
+  populateDocSelect(els.summaryDocSelect, 'summary', activeSummaryDocId);
+  populateDocSelect(els.quizDocSelect, 'quiz', activeQuizDocId);
+
+  bindFeatureDocControls({
+    feature: 'workspace',
+    selectEl: els.workspaceDocSelect,
+    newBtnEl: els.workspaceNewDoc,
+    renameBtnEl: els.workspaceRenameDoc,
+    onSwitch: () => syncWorkspaceState()
+  });
+  bindFeatureDocControls({
+    feature: 'textbook',
+    selectEl: els.textbookDocSelect,
+    newBtnEl: els.textbookNewDoc,
+    renameBtnEl: els.textbookRenameDoc,
+    onSwitch: () => syncTextbookState()
+  });
+  bindFeatureDocControls({
+    feature: 'summary',
+    selectEl: els.summaryDocSelect,
+    newBtnEl: els.summaryNewDoc,
+    renameBtnEl: els.summaryRenameDoc
+  });
+  bindFeatureDocControls({
+    feature: 'quiz',
+    selectEl: els.quizDocSelect,
+    newBtnEl: els.quizNewDoc,
+    renameBtnEl: els.quizRenameDoc
+  });
+
+  loadActiveFeatureState('workspace', activeWorkspaceDocId);
+  loadActiveFeatureState('textbook', activeTextbookDocId);
+  loadActiveFeatureState('summary', activeSummaryDocId);
+  loadActiveFeatureState('quiz', activeQuizDocId);
+}
+
 function initAiTools() {
+  renderSummaryChatThread();
+
   if (els.summaryGenerate) {
     els.summaryGenerate.addEventListener('click', async () => {
       try {
@@ -1948,6 +2423,8 @@ function initAiTools() {
           els.summaryChatPanel.classList.remove('hidden');
         }
         renderSummaryChatThread();
+        saveActiveFeatureState('summary');
+        populateDocSelect(els.summaryDocSelect, 'summary', activeSummaryDocId);
       } catch (err) {
         const msg = String(err?.message || err).slice(0, 160);
         els.summaryStatus.textContent = `Summary failed: ${msg}`;
@@ -1976,6 +2453,7 @@ function initAiTools() {
         }
         renderSummaryChatThread();
         els.summaryStatus.textContent = 'Follow-up answer ready.';
+        saveActiveFeatureState('summary');
       } catch (err) {
         const msg = String(err?.message || err).slice(0, 160);
         els.summaryStatus.textContent = `Follow-up failed: ${msg}`;
@@ -1991,6 +2469,10 @@ function initAiTools() {
     });
   }
 
+  if (els.summarySourceUrl) {
+    els.summarySourceUrl.addEventListener('input', () => saveActiveFeatureState('summary'));
+  }
+
   if (els.quizGenerate) {
     els.quizGenerate.addEventListener('click', async () => {
       try {
@@ -2004,6 +2486,8 @@ function initAiTools() {
           const data = await apiPost('/textbook/quiz-set', { text, count: 10 });
           renderAiQuizSet(data?.questions || [], els.quizToolOutput);
           els.quizStatus.textContent = 'Quiz ready. Answer all questions, then submit.';
+          saveActiveFeatureState('quiz');
+          populateDocSelect(els.quizDocSelect, 'quiz', activeQuizDocId);
         } catch (err) {
           const msg = String(err?.message || err);
           if (/not found/i.test(msg)) {
@@ -2014,6 +2498,7 @@ function initAiTools() {
             }
             renderAiQuizSet(fallback, els.quizToolOutput);
             els.quizStatus.textContent = 'Quiz ready (fallback). Restart server to enable Gemini quiz-set endpoint.';
+            saveActiveFeatureState('quiz');
           } else {
             throw err;
           }
@@ -2023,6 +2508,10 @@ function initAiTools() {
         els.quizStatus.textContent = `Quiz failed: ${msg}`;
       }
     });
+  }
+
+  if (els.quizSourceUrl) {
+    els.quizSourceUrl.addEventListener('input', () => saveActiveFeatureState('quiz'));
   }
 }
 
@@ -2277,13 +2766,11 @@ function renderGarden() {
 }
 
 function boot() {
-  const savedDoc = localStorage.getItem(STORAGE_KEYS.DOC);
-  els.editor.innerHTML = savedDoc || '<h2>Untitled Workspace</h2><p>Drag key points here.</p>';
   const settings = getSettings();
   els.publicLinkDefault.checked = settings.publicByDefault;
   applyTheme(settings.theme);
-  const textbook = loadJSON(STORAGE_KEYS.TEXTBOOK, { name: 'Textbook 1' });
-  els.textbookName.value = textbook.name || 'Textbook 1';
+  els.editor.innerHTML = '<h2>Untitled Workspace</h2><p>Drag key points here.</p>';
+  els.textbookName.value = 'Textbook 1';
 
   els.navBtns.forEach((btn) => btn.addEventListener('click', () => setView(btn.dataset.view)));
   els.goBtns.forEach((btn) => btn.addEventListener('click', () => setView(btn.dataset.go)));
@@ -2301,6 +2788,7 @@ function boot() {
   initSharingAndExport();
   initTextbook();
   initTTS();
+  initFeatureDocManagers();
   renderGarden();
   seedKeyPoints('sample lecture');
   updateEditorPageSizing();
