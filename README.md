@@ -29,8 +29,9 @@ SmartNotes makes it simple to capture key points and make them into easy to foll
 
 ## Mission Objectives 
 
-Video Notes: Upload videos, transcription/screenshots made available on sidebar, and make key points available as drag-and-drop points to workspace
-Textbook Notes: Import Textbook pdf and use text-to-speech with built-in highlight/underline/comment features that save to read textbooks while taking notes
+* Video Notes: Upload videos, transcription/screenshots made available on sidebar, and make key points available as drag-and-drop points to workspace
+
+* Textbook Notes: Import Textbook pdf and use text-to-speech with built-in highlight/underline/comment features that save to read textbooks while taking notes
 
 * Live Notes: Record lectures/zoom meetings live and make available key points to drag-and-drop to workspace live. 
 
