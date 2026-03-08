@@ -1,0 +1,190 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartNotes</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">SmartNotes</div>
+    <nav class="nav">
+      <button class="nav-btn active" data-view="home">Home</button>
+      <button class="nav-btn" data-view="workspace">Workspace</button>
+      <button class="nav-btn" data-view="textbook">Textbook</button>
+      <button class="nav-btn" data-view="garden">Garden</button>
+      <button class="nav-btn" data-view="settings">Settings</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="home" class="view active">
+      <h1>Take Notes, Smartly</h1>
+      <p class="sub">Capture lectures, build notes fast, and keep everything local in your browser.</p>
+      <div class="cards">
+        <article class="card">
+          <h3>Video Notes</h3>
+          <p>Upload a video or paste a URL, then drag suggested key points and screenshots into your workspace.</p>
+          <button data-go="workspace">Open Workspace</button>
+        </article>
+        <article class="card">
+          <h3>Textbook Notes</h3>
+          <p>Import a textbook PDF, annotate, run text-to-speech, and generate chapter summaries/quizzes.</p>
+          <button data-go="textbook">Open Textbook</button>
+        </article>
+        <article class="card">
+          <h3>Live Notes</h3>
+          <p>Live-note mode is scaffolded here and ready for real audio/video transcription integration.</p>
+          <button data-go="workspace">Start Live Notes</button>
+        </article>
+      </div>
+    </section>
+
+    <section id="workspace" class="view">
+      <div class="workspace-grid">
+        <aside class="panel left">
+          <h2>Sources</h2>
+          <label class="input-row">Video URL
+            <input id="videoUrl" type="url" placeholder="https://..." />
+          </label>
+          <div class="actions">
+            <button id="loadVideoUrl">Load URL</button>
+            <label class="file-btn">Upload Video
+              <input id="videoFile" type="file" accept="video/*" hidden />
+            </label>
+            <button id="startLiveNotes">Take Live Notes</button>
+          </div>
+          <div id="aiStatus" class="status">Idle</div>
+          <h3>Key Points (drag into workspace)</h3>
+          <ul id="keyPointList" class="drag-list"></ul>
+        </aside>
+
+        <section class="editor-wrap">
+          <div class="editor-toolbar">
+            <button data-cmd="bold">Bold</button>
+            <button data-cmd="italic">Italic</button>
+            <button data-cmd="underline">Underline</button>
+            <button data-cmd="insertUnorderedList">List</button>
+            <button data-cmd="justifyLeft">Left</button>
+            <button data-cmd="justifyCenter">Center</button>
+            <button data-cmd="justifyRight">Right</button>
+            <button id="insertTable">Table</button>
+            <select id="fontSize">
+              <option value="3">Font</option>
+              <option value="2">Small</option>
+              <option value="3">Normal</option>
+              <option value="5">Large</option>
+            </select>
+          </div>
+          <div id="workspaceEditor" class="editor" contenteditable="true"></div>
+          <div class="editor-actions">
+            <button id="manualSave">Save Now</button>
+            <button id="showVersions">Version History</button>
+            <button id="shareDoc">Share</button>
+            <button id="exportPdf">Export .pdf</button>
+            <span id="saveState">Not saved</span>
+          </div>
+          <div id="versionPanel" class="version-panel hidden"></div>
+        </section>
+
+        <aside class="panel right" id="videoPanel">
+          <div class="panel-head">
+            <h2>Video</h2>
+            <button id="toggleVideoPanel">Collapse</button>
+          </div>
+          <video id="videoPlayer" controls playsinline></video>
+          <div class="video-controls">
+            <label>Speed
+              <select id="playbackRate">
+                <option>0.5</option>
+                <option>0.75</option>
+                <option selected>1</option>
+                <option>1.5</option>
+                <option>2</option>
+              </select>
+            </label>
+            <button id="captureFrame">Copy Screenshot</button>
+          </div>
+          <div id="videoMsg" class="status">No video loaded.</div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="textbook" class="view">
+      <div class="textbook-grid">
+        <aside class="panel left">
+          <h2>Textbook</h2>
+          <label class="file-btn">Import PDF
+            <input id="textbookFile" type="file" accept="application/pdf" hidden />
+          </label>
+          <label class="input-row">Name
+            <input id="textbookName" placeholder="Textbook 1" />
+          </label>
+          <h3>Chapters</h3>
+          <ul id="chapterList" class="chapter-list"></ul>
+        </aside>
+
+        <section class="textbook-viewer">
+          <iframe id="pdfFrame" title="PDF Reader"></iframe>
+          <textarea id="textbookText" placeholder="Paste chapter text here for TTS/Summary/Quiz workflows."></textarea>
+          <div class="textbook-tools">
+            <button id="highlightSel">Highlight</button>
+            <button id="underlineSel">Underline</button>
+            <button id="addComment">Comment</button>
+            <button id="drawMode">Draw Mode</button>
+            <button id="chapterSummary">AI Summary</button>
+            <button id="chapterQuiz">AI Quiz</button>
+          </div>
+          <div id="annotationOutput" class="annotation-output"></div>
+        </section>
+
+        <aside class="panel right">
+          <h2>TTS</h2>
+          <div class="tts-controls">
+            <button id="ttsPlay">Play</button>
+            <button id="ttsPause">Pause</button>
+            <button id="ttsStop">Stop</button>
+            <label>Rate <input id="ttsRate" type="range" min="0.5" max="2" step="0.1" value="1" /></label>
+            <label>Voice <select id="ttsVoice"></select></label>
+            <div class="jump-row">
+              <button data-jump="-10">-10s</button>
+              <button data-jump="-5">-5s</button>
+              <button data-jump="5">+5s</button>
+              <button data-jump="10">+10s</button>
+            </div>
+          </div>
+          <div id="textbookStatus" class="status">No textbook loaded.</div>
+          <div id="quizOutput" class="quiz-output"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="garden" class="view">
+      <h2>Garden</h2>
+      <p>Earn XP by using SmartNotes features. Spend points on decorations.</p>
+      <div class="garden-stats">
+        <div>XP: <span id="xpCount">0</span></div>
+        <div>Coins: <span id="coinCount">0</span></div>
+      </div>
+      <div id="gardenShop" class="cards"></div>
+      <div id="gardenOwned" class="annotation-output"></div>
+    </section>
+
+    <section id="settings" class="view">
+      <h2>Settings</h2>
+      <label class="toggle-row">
+        <input id="publicLinkDefault" type="checkbox" />
+        Default shared documents to Public
+      </label>
+      <p class="sub">All data stays in local browser storage in this prototype.</p>
+    </section>
+  </main>
+
+  <template id="keyPointTpl">
+    <li class="drag-item" draggable="true"></li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
