@@ -36,6 +36,7 @@ const GEMINI_FALLBACK_MODELS = (
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
+const QUIZ_GEMINI_MODEL = process.env.QUIZ_GEMINI_MODEL || 'gemini-2.5-pro';
 const ROOT = __dirname;
 const SERVER_BUILD = '2026-03-08-b1';
 let discoveredModelCache = null;
@@ -262,12 +263,51 @@ async function callGemini(prompt) {
   throw new Error(`No Gemini model succeeded; attempted models: ${attempted.join(', ')}`);
 }
 
+async function callGeminiForQuiz(prompt) {
+  const preferred = normalizeModelName(QUIZ_GEMINI_MODEL);
+  if (preferred) {
+    try {
+      const payload = await callGeminiWithModel(prompt, preferred);
+      return { payload, model: preferred };
+    } catch {
+      // Fall through to standard model chain.
+    }
+  }
+  return callGemini(prompt);
+}
+
 function splitSentences(text) {
   return text
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function decodeHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function extractReadableTextFromHtml(html) {
+  const titleMatch = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? decodeHtmlEntities(titleMatch[1]).replace(/\s+/g, ' ').trim() : '';
+  const clean = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return {
+    title,
+    text: decodeHtmlEntities(clean).slice(0, 12000)
+  };
 }
 
 function parseKeyPointsFromModelText(text) {
@@ -821,6 +861,64 @@ async function handleVideoAnalyze(req, res) {
   });
 }
 
+async function handleContentExtract(req, res) {
+  const body = await readJsonBody(req);
+  const source = String(body.source || '').trim();
+  if (!source) {
+    return sendJson(res, 400, { error: 'source is required' });
+  }
+
+  const videoId = extractYouTubeVideoId(source);
+  if (videoId) {
+    try {
+      const yt = await fetchYouTubeTranscript(videoId);
+      const text = String(yt.transcript || '').trim();
+      return sendJson(res, 200, {
+        sourceType: 'youtube',
+        title: yt.title || '',
+        text: text.slice(0, 12000)
+      });
+    } catch (err) {
+      return sendJson(res, 502, { error: `YouTube extraction failed: ${err.message}` });
+    }
+  }
+
+  let url;
+  try {
+    url = new URL(source);
+  } catch {
+    return sendJson(res, 400, { error: 'source must be a valid URL' });
+  }
+  if (!/^https?:$/i.test(url.protocol)) {
+    return sendJson(res, 400, { error: 'Only http(s) URLs are supported' });
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'SmartNotes/1.0 (+http://localhost)'
+    }
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    return sendJson(res, 502, { error: `URL fetch failed (${response.status}): ${detail.slice(0, 200)}` });
+  }
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/pdf')) {
+    return sendJson(res, 400, { error: 'PDF URLs are not yet directly extractable here. Please upload the PDF file.' });
+  }
+  const html = await response.text();
+  const extracted = extractReadableTextFromHtml(html);
+  if (!extracted.text) {
+    return sendJson(res, 502, { error: 'No readable text found at URL' });
+  }
+  return sendJson(res, 200, {
+    sourceType: 'url',
+    title: extracted.title,
+    text: extracted.text
+  });
+}
+
 async function handleSummary(req, res) {
   const body = await readJsonBody(req);
   const text = String(body.text || '').slice(0, 12000);
@@ -832,7 +930,36 @@ async function handleSummary(req, res) {
     `${text}\n\n` +
     `Output plain text only.`;
   const { payload } = await callGemini(prompt);
-  return sendJson(res, 200, { summary: extractModelText(payload) });
+  return sendJson(res, 200, { summary: extractModelText(payload), provider: 'gemini' });
+}
+
+async function handleSummaryChat(req, res) {
+  const body = await readJsonBody(req);
+  const summary = String(body.summary || '').slice(0, 6000);
+  const sourceText = String(body.sourceText || '').slice(0, 12000);
+  const question = String(body.question || '').slice(0, 1200);
+  const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+  if (!summary || !question) {
+    return sendJson(res, 400, { error: 'summary and question are required' });
+  }
+
+  const historyText = history
+    .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${String(m.text || '').slice(0, 800)}`)
+    .join('\n');
+
+  const prompt =
+    `You are a study assistant answering follow-up questions about a generated summary.\n` +
+    `Use the summary as primary context, and source text when needed.\n` +
+    `Be concise and accurate.\n\n` +
+    `Summary:\n${summary}\n\n` +
+    `Source text excerpt:\n${sourceText}\n\n` +
+    `Conversation so far:\n${historyText}\n\n` +
+    `User question:\n${question}\n\n` +
+    `Answer in plain text only.`;
+
+  const { payload } = await callGemini(prompt);
+  const answer = extractModelText(payload);
+  return sendJson(res, 200, { answer: answer || '' });
 }
 
 function heuristicTextbookOutline(text, pageSamples, maxPage) {
@@ -945,14 +1072,152 @@ async function handleQuiz(req, res) {
   const parsed = extractFirstJsonObject(modelText);
   const quiz = parsed?.quiz || null;
   if (!quiz || !quiz.q || !Array.isArray(quiz.options) || !quiz.answer) {
-    return sendJson(res, 200, { quiz: null });
+    return sendJson(res, 200, { quiz: null, provider: 'gemini' });
   }
   const cleanQuiz = {
     q: String(quiz.q).trim(),
     options: quiz.options.map((x) => String(x).trim()).filter(Boolean).slice(0, 4),
     answer: String(quiz.answer).trim()
   };
-  return sendJson(res, 200, { quiz: cleanQuiz });
+  return sendJson(res, 200, { quiz: cleanQuiz, provider: 'gemini' });
+}
+
+function buildHeuristicQuizSet(text, count = 10) {
+  const tokens = (String(text || '').match(/[A-Za-z]{5,}/g) || []).map((x) => x.toLowerCase());
+  const unique = [...new Set(tokens)].slice(0, 120);
+  if (unique.length < 8) return [];
+  const stems = [
+    'Which term appears as a key concept in the material?',
+    'Which of the following terms is explicitly mentioned in the source?',
+    'Select the term that best matches the source content.',
+    'Which term would most likely appear in a summary of this source?',
+    'Identify the term that is present in the material.'
+  ];
+  const questions = [];
+  for (let i = 0; i < count; i += 1) {
+    const answer = unique[(i * 3) % unique.length];
+    const distractors = unique.filter((x) => x !== answer).slice(i, i + 12);
+    const options = [answer, ...distractors.slice(0, 3)].sort(() => Math.random() - 0.5);
+    questions.push({
+      q: `${stems[i % stems.length]} (Question ${i + 1})`,
+      options,
+      answer
+    });
+  }
+  return questions;
+}
+
+function normalizeQuizSet(rawQuestions, count) {
+  const normalized = (Array.isArray(rawQuestions) ? rawQuestions : [])
+    .map((q) => {
+      const question = String(q?.q || q?.question || '').trim();
+      const answer = String(q?.answer || '').trim();
+      const options = Array.isArray(q?.options)
+        ? q.options.map((x) => String(x).trim()).filter(Boolean).slice(0, 6)
+        : [];
+      if (!question || !answer || options.length < 2) return null;
+      if (!options.includes(answer)) options.unshift(answer);
+      return {
+        q: question,
+        options: [...new Set(options)].slice(0, 4),
+        answer
+      };
+    })
+    .filter((x) => x && x.options.length >= 2);
+  const deduped = [];
+  const seen = new Set();
+  const tokenSets = [];
+  const jaccard = (a, b) => {
+    const inter = [...a].filter((x) => b.has(x)).length;
+    const union = new Set([...a, ...b]).size || 1;
+    return inter / union;
+  };
+  const tokenized = (s) =>
+    new Set(
+      String(s || '')
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2)
+    );
+  for (const q of normalized) {
+    const key = q.q.toLowerCase();
+    if (seen.has(key)) continue;
+    const set = tokenized(q.q);
+    const tooSimilar = tokenSets.some((prev) => jaccard(prev, set) >= 0.82);
+    if (tooSimilar) continue;
+    seen.add(key);
+    tokenSets.push(set);
+    deduped.push(q);
+    if (deduped.length >= count) break;
+  }
+  return deduped;
+}
+
+async function handleQuizSet(req, res) {
+  const body = await readJsonBody(req);
+  const text = String(body.text || '').slice(0, 20000);
+  const count = Math.max(5, Math.min(12, Number(body.count || 10)));
+  if (!text) {
+    return sendJson(res, 400, { error: 'text is required' });
+  }
+
+  const prompt =
+    `Create ${count} multiple-choice study questions from the content below.\n` +
+    `Return JSON only in this exact shape: {"questions":[{"q":"...","options":["A","B","C","D"],"answer":"..."}]}.\n` +
+    `Rules:\n` +
+    `- Exactly ${count} questions.\n` +
+    `- Every question must be distinct and test a different idea.\n` +
+    `- Do not repeat wording patterns like "Which term appears..." across questions.\n` +
+    `- Vary question style (definition, concept application, comparison, cause/effect, detail recall).\n` +
+    `- 4 options per question.\n` +
+    `- answer must exactly match one option.\n` +
+    `- Focus on key facts/concepts, avoid trivial wording.\n\n` +
+    text;
+  try {
+    const { payload } = await callGeminiForQuiz(prompt);
+    const modelText = extractModelText(payload);
+    const parsed = extractFirstJsonObject(modelText);
+    let questions = normalizeQuizSet(parsed?.questions, count);
+    if (questions.length < count) {
+      const missing = count - questions.length;
+      const used = questions.map((q) => q.q).join('\n');
+      const secondPrompt =
+        `Generate ${missing} NEW multiple-choice study questions from this content.\n` +
+        `Return JSON only: {"questions":[{"q":"...","options":["A","B","C","D"],"answer":"..."}]}.\n` +
+        `Do not repeat or paraphrase any existing question below.\n` +
+        `Existing questions to avoid:\n${used}\n\n` +
+        `Source content:\n${text}`;
+      try {
+        const second = await callGeminiForQuiz(secondPrompt);
+        const secondParsed = extractFirstJsonObject(extractModelText(second.payload));
+        const more = normalizeQuizSet(secondParsed?.questions, missing);
+        questions = normalizeQuizSet([...questions, ...more], count);
+      } catch {
+        // Keep existing questions and fill via heuristic below.
+      }
+    }
+    if (questions.length < count) {
+      const fill = buildHeuristicQuizSet(text, count * 2);
+      const used = new Set(questions.map((q) => q.q.toLowerCase()));
+      for (const q of fill) {
+        const k = String(q.q || '').toLowerCase();
+        if (!used.has(k)) {
+          used.add(k);
+          questions.push(q);
+        }
+        if (questions.length >= count) break;
+      }
+    }
+    if (questions.length >= Math.min(6, count)) {
+      return sendJson(res, 200, { questions: questions.slice(0, count), provider: 'gemini' });
+    }
+  } catch {
+    // fallback below
+  }
+
+  const fallback = buildHeuristicQuizSet(text, count);
+  return sendJson(res, 200, { questions: fallback, provider: 'fallback' });
 }
 
 async function handleTtsPrepare(req, res) {
@@ -1089,6 +1354,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/video/analyze') {
       return await handleVideoAnalyze(req, res);
     }
+    if (req.method === 'POST' && pathname === '/api/content/extract') {
+      return await handleContentExtract(req, res);
+    }
     if (req.method === 'GET' && pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true,
@@ -1101,11 +1369,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/api/textbook/summary') {
       return await handleSummary(req, res);
     }
+    if (req.method === 'POST' && pathname === '/api/textbook/summary/chat') {
+      return await handleSummaryChat(req, res);
+    }
     if (req.method === 'POST' && pathname === '/api/textbook/outline') {
       return await handleTextbookOutline(req, res);
     }
     if (req.method === 'POST' && pathname === '/api/textbook/quiz') {
       return await handleQuiz(req, res);
+    }
+    if (req.method === 'POST' && pathname === '/api/textbook/quiz-set') {
+      return await handleQuizSet(req, res);
     }
     if (req.method === 'POST' && pathname === '/api/tts/prepare') {
       return await handleTtsPrepare(req, res);

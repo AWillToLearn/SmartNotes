@@ -2,6 +2,20 @@
   navBtns: [...document.querySelectorAll('.nav-btn')],
   views: [...document.querySelectorAll('.view')],
   goBtns: [...document.querySelectorAll('[data-go]')],
+  summarySourceUrl: document.getElementById('summarySourceUrl'),
+  summarySourceFile: document.getElementById('summarySourceFile'),
+  summaryGenerate: document.getElementById('summaryGenerate'),
+  summaryStatus: document.getElementById('summaryStatus'),
+  summaryOutput: document.getElementById('summaryOutput'),
+  summaryChatPanel: document.getElementById('summaryChatPanel'),
+  summaryChatThread: document.getElementById('summaryChatThread'),
+  summaryChatInput: document.getElementById('summaryChatInput'),
+  summaryChatSend: document.getElementById('summaryChatSend'),
+  quizSourceUrl: document.getElementById('quizSourceUrl'),
+  quizSourceFile: document.getElementById('quizSourceFile'),
+  quizGenerate: document.getElementById('quizGenerate'),
+  quizStatus: document.getElementById('quizStatus'),
+  quizToolOutput: document.getElementById('quizToolOutput'),
   editor: document.getElementById('workspaceEditor'),
   keyPointList: document.getElementById('keyPointList'),
   aiStatus: document.getElementById('aiStatus'),
@@ -77,11 +91,15 @@ let textbookPdfObjectUrl = '';
 let textbookPdfBuffer = null;
 let textbookOcrPages = [];
 let textbookBookmarkChapters = [];
+let textbookPageCount = 0;
 let ocrActive = false;
 let ttsChunks = [];
 let ttsChunkIndex = 0;
 let ttsSessionId = 0;
 let ttsCurrentLabel = 'document';
+let ttsAnchorPage = 1;
+let ttsScopeRadius = 2;
+let ttsCurrentRange = { start: 1, end: 1 };
 const API_BASE = '/api';
 let timedKeyPoints = [];
 let captionsEnabled = false;
@@ -90,6 +108,11 @@ let ytApiReadyPromise = null;
 let currentYouTubeId = null;
 let analysisRequestId = 0;
 let usingDirectYouTubeEmbed = false;
+let aiCachedText = '';
+let summarySourceText = '';
+let summaryLatest = '';
+let summaryChatHistory = [];
+let aiQuizQuestions = [];
 
 const shopItems = [
   { id: 'plant', label: 'Potted Plant', cost: 25 },
@@ -562,6 +585,27 @@ async function buildPdfDocFromBuffer() {
   return loadingTask.promise;
 }
 
+async function ensureTextbookPageCount() {
+  if (textbookPageCount > 0) return textbookPageCount;
+  if (textbookPages.length) {
+    textbookPageCount = textbookPages.length;
+    return textbookPageCount;
+  }
+  if (!textbookPdfBuffer) return 0;
+  const pdf = await buildPdfDocFromBuffer();
+  textbookPageCount = Number(pdf?.numPages || 0);
+  return textbookPageCount;
+}
+
+async function ocrCanvas(canvas, psm = '6') {
+  await ensureTesseractLoaded();
+  const result = await window.Tesseract.recognize(canvas, 'eng', {
+    tessedit_pageseg_mode: String(psm),
+    preserve_interword_spaces: '1'
+  });
+  return String(result?.data?.text || '').replace(/\s+\n/g, '\n').trim();
+}
+
 async function ocrPdfPage(pageNumber, scale = 2.1) {
   const existing = textbookOcrPages.find((p) => p.page === pageNumber && p.text);
   if (existing) return existing.text;
@@ -574,12 +618,20 @@ async function ocrPdfPage(pageNumber, scale = 2.1) {
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
   await page.render({ canvasContext: ctx, viewport }).promise;
-  await ensureTesseractLoaded();
-  const result = await window.Tesseract.recognize(canvas, 'eng', {
-    tessedit_pageseg_mode: '6',
-    preserve_interword_spaces: '1'
-  });
-  const text = String(result?.data?.text || '').replace(/\s+\n/g, '\n').trim();
+  let text = await ocrCanvas(canvas, '6');
+  // Fallback pass for difficult layouts/scans.
+  if (text.length < 30) {
+    const viewport2 = page.getViewport({ scale: 2.6 });
+    const canvas2 = document.createElement('canvas');
+    const ctx2 = canvas2.getContext('2d');
+    canvas2.width = Math.ceil(viewport2.width);
+    canvas2.height = Math.ceil(viewport2.height);
+    await page.render({ canvasContext: ctx2, viewport: viewport2 }).promise;
+    const pass2 = await ocrCanvas(canvas2, '3');
+    if (pass2.length > text.length) {
+      text = pass2;
+    }
+  }
   const row = { page: pageNumber, text };
   textbookOcrPages = [...textbookOcrPages.filter((p) => p.page !== pageNumber), row].sort(
     (a, b) => a.page - b.page
@@ -625,6 +677,24 @@ async function ocrUntilMinChars(startPage, maxPage, minChars, reasonLabel) {
     .map((row) => row.text)
     .join('\n')
     .trim();
+}
+
+async function ocrFindAnyReadableText(minChars = 600, reasonLabel = 'TTS') {
+  if (!textbookPdfBuffer) return '';
+  const pdf = await buildPdfDocFromBuffer();
+  if (!pdf) return '';
+  const total = Number(pdf.numPages || 1);
+  const pagesToTry = [];
+  for (let p = 1; p <= total; p += 1) pagesToTry.push(p);
+  for (let i = 0; i < pagesToTry.length; i += 1) {
+    const p = pagesToTry[i];
+    await ocrPdfRange(p, p, `${reasonLabel} fallback`);
+    const txt = String(textbookOcrPages.find((x) => x.page === p)?.text || '').trim();
+    if (txt.length >= minChars) {
+      return txt;
+    }
+  }
+  return textbookOcrPages.map((p) => p.text).join('\n').trim();
 }
 
 async function checkBackendHealth() {
@@ -1279,6 +1349,8 @@ function jumpToChapter(index) {
   if (!chapter || !textbookPdfObjectUrl) return;
   const page = Math.max(1, resolveChapterStartPage(chapter));
   els.pdfFrame.src = `${textbookPdfObjectUrl}#page=${page}&zoom=page-fit`;
+  ttsAnchorPage = page;
+  ttsCurrentRange = { start: page, end: page };
 }
 
 function getChapterTextSlice(index) {
@@ -1326,15 +1398,51 @@ function getDocumentTtsText() {
   return String(els.textbookText.value || '').trim();
 }
 
+function collectTextFromRange(startPage, endPage) {
+  const start = Math.max(1, Number(startPage || 1));
+  const end = Math.max(start, Number(endPage || start));
+  const basePool = textbookPages.length ? textbookPages : textbookOcrPages;
+  const ordered = basePool
+    .filter((p) => p.page >= start && p.page <= end)
+    .sort((a, b) => a.page - b.page);
+  return ordered.map((p) => String(p.text || '').trim()).filter(Boolean).join('\n').trim();
+}
+
 async function getDocumentTtsTextWithOcrFallback() {
-  const text = getDocumentTtsText();
-  if (text) return text;
-  if (!textbookPdfBuffer) return '';
-  const pdf = await buildPdfDocFromBuffer();
-  if (!pdf) return '';
-  const scanEnd = Math.min(Number(pdf.numPages || 1), 40);
-  const ocrText = await ocrUntilMinChars(1, scanEnd, 2200, 'TTS');
-  return String(ocrText || '').slice(0, 18000);
+  const totalPages = await ensureTextbookPageCount();
+  if (!totalPages) {
+    return getDocumentTtsText();
+  }
+
+  const anchor = Math.max(1, Math.min(totalPages, Number(ttsAnchorPage || 1)));
+  let radius = Math.max(1, Number(ttsScopeRadius || 2));
+  let start = Math.max(1, anchor - radius);
+  let end = Math.min(totalPages, anchor + radius);
+  let text = collectTextFromRange(start, end);
+
+  while (text.length < 1200 && (start > 1 || end < totalPages)) {
+    if (textbookPdfBuffer) {
+      await ocrUntilMinChars(start, end, 900, `TTS near p.${anchor}`);
+      text = collectTextFromRange(start, end);
+      if (text.length >= 1200) break;
+    }
+    radius = Math.min(radius + 2, Math.ceil(totalPages / 2));
+    start = Math.max(1, anchor - radius);
+    end = Math.min(totalPages, anchor + radius);
+    text = collectTextFromRange(start, end);
+    if (radius >= totalPages && text.length) break;
+  }
+
+  if (!text.trim() && textbookPdfBuffer) {
+    text = await ocrFindAnyReadableText(400, 'TTS');
+  }
+  if (!text.trim()) {
+    text = getDocumentTtsText();
+  }
+
+  ttsCurrentRange = { start, end };
+  ttsScopeRadius = Math.min(Math.max(radius, ttsScopeRadius) + 1, Math.max(3, totalPages));
+  return String(text || '').slice(0, 18000);
 }
 
 async function playTtsText(text, label) {
@@ -1387,6 +1495,10 @@ async function playNextTtsChunk(sessionId, label) {
   if (sessionId !== ttsSessionId) return;
   if (!ttsChunks.length || ttsChunkIndex >= ttsChunks.length) {
     els.textbookStatus.textContent = `TTS finished ${label}.`;
+    if (String(label || '').toLowerCase() === 'document') {
+      const nextAnchor = Math.max(1, Number(ttsCurrentRange.end || ttsAnchorPage || 1));
+      ttsAnchorPage = nextAnchor;
+    }
     return;
   }
   const voiceId = els.ttsVoice.value;
@@ -1434,6 +1546,8 @@ function startTtsChunkedPlayback(text, label) {
 
 async function startTtsFromChapter(index) {
   jumpToChapter(index);
+  const startPageHint = resolveChapterStartPage(textbookChapters[index]);
+  ttsAnchorPage = startPageHint;
   let text = getChapterTextSlice(index);
   if (!text && textbookPdfBuffer) {
     const start = resolveChapterStartPage(textbookChapters[index]);
@@ -1446,6 +1560,12 @@ async function startTtsFromChapter(index) {
       chapterLabel(index)
     );
     text = String(chapterOcr || '').slice(0, 18000);
+    ttsCurrentRange = { start, end: Math.min(naturalEnd, start + 14) };
+    ttsAnchorPage = ttsCurrentRange.start;
+  }
+  if (!text) {
+    const localAny = await ocrFindAnyReadableText(350, chapterLabel(index));
+    text = String(localAny || '').slice(0, 18000);
   }
   if (!text) {
     const documentFallback = await getDocumentTtsTextWithOcrFallback();
@@ -1512,6 +1632,351 @@ function makeQuiz(text) {
   };
 }
 
+function isSupportedHomeTextFile(file) {
+  if (!file) return false;
+  const type = String(file.type || '').toLowerCase();
+  if (type.includes('text/') || type.includes('json') || type.includes('rtf') || type.includes('csv')) {
+    return true;
+  }
+  return /\.(txt|md|json|rtf|csv)$/i.test(file.name || '');
+}
+
+async function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Could not read file.'));
+    reader.readAsText(file);
+  });
+}
+
+async function getAiSourceText({ fileInput, urlInput, statusEl }) {
+  const file = fileInput?.files?.[0] || null;
+  const url = String(urlInput?.value || '').trim();
+
+  if (!file && !url) {
+    throw new Error('Upload a file or enter a URL.');
+  }
+
+  if (file) {
+    if (statusEl) statusEl.textContent = `Reading file: ${file.name}...`;
+    if (/\.pdf$/i.test(file.name) || String(file.type).includes('pdf')) {
+      const pdfData = await extractPdfData(file);
+      const text = String(pdfData?.fullText || '').trim();
+      if (!text) throw new Error('No readable text found in PDF.');
+      aiCachedText = text.slice(0, 12000);
+      return aiCachedText;
+    }
+    if (isSupportedHomeTextFile(file)) {
+      const raw = await readFileText(file);
+      const text = String(raw || '').trim();
+      if (!text) throw new Error('Uploaded file is empty.');
+      aiCachedText = text.slice(0, 12000);
+      return aiCachedText;
+    }
+    throw new Error('Unsupported file type. Use PDF, TXT, MD, CSV, JSON, or RTF.');
+  }
+
+  const ytId = extractYouTubeVideoId(url);
+  if (ytId) {
+    if (statusEl) statusEl.textContent = 'Analyzing video URL with Gemini...';
+    try {
+      const data = await apiPost('/video/analyze', { source: url, stage: 'full' });
+      const points = Array.isArray(data?.keyPoints) ? data.keyPoints : [];
+      const timed = Array.isArray(data?.timedKeyPoints) ? data.timedKeyPoints : [];
+      const stitched = [
+        ...points.map((p) => String(p).trim()),
+        ...timed.map((t) => `[${t.label || formatTimeLabel(t.timeSec || 0)}] ${String(t.text || '').trim()}`)
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const text = stitched.trim();
+      if (text) {
+        aiCachedText = text.slice(0, 12000);
+        return aiCachedText;
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  if (statusEl) statusEl.textContent = 'Fetching URL content...';
+  let text = '';
+  try {
+    const data = await apiPost('/content/extract', { source: url });
+    text = String(data?.text || '').trim();
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (/not found/i.test(msg)) {
+      try {
+        const local = await fetch(url);
+        if (local.ok) {
+          const raw = await local.text();
+          text = String(raw || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+      } catch {
+        // ignored
+      }
+      if (!text) {
+        throw new Error('URL extraction endpoint missing. Restart server to load /api/content/extract.');
+      }
+    } else {
+      throw err;
+    }
+  }
+  if (!text) {
+    throw new Error('Could not extract readable text from URL.');
+  }
+  aiCachedText = text.slice(0, 12000);
+  return aiCachedText;
+}
+
+function renderAiQuiz(quiz, outputEl) {
+  if (!outputEl) return;
+  if (!quiz || typeof quiz === 'string') {
+    outputEl.textContent = quiz || 'Quiz could not be generated.';
+    return;
+  }
+  outputEl.innerHTML = `<h4>Quiz</h4><p>${quiz.q}</p>${quiz.options
+    .map((o) => `<button class="quiz-opt" data-correct="${o === quiz.answer}">${o}</button>`)
+    .join('')}`;
+  [...outputEl.querySelectorAll('.quiz-opt')].forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ok = btn.dataset.correct === 'true';
+      btn.style.background = ok ? '#d8f2da' : '#ffd8d8';
+    });
+  });
+}
+
+function renderAiQuizSet(questions, outputEl) {
+  if (!outputEl) return;
+  aiQuizQuestions = Array.isArray(questions) ? questions : [];
+  if (!aiQuizQuestions.length) {
+    outputEl.textContent = 'Quiz could not be generated.';
+    return;
+  }
+  outputEl.innerHTML = aiQuizQuestions
+    .map(
+      (q, idx) => `
+        <div class="quiz-question" data-q-index="${idx}" style="margin-bottom:12px;">
+          <p><strong>Q${idx + 1}.</strong> ${escapeHtml(q.q || '')}</p>
+          ${q.options
+            .map(
+              (opt, optIdx) => `
+                <label class="quiz-option-label" data-q-index="${idx}" data-opt-index="${optIdx}" style="display:block;margin:4px 0;">
+                  <input type="radio" name="quiz-q-${idx}" value="${optIdx}" data-opt-index="${optIdx}" />
+                  ${escapeHtml(opt)}
+                </label>
+              `
+            )
+            .join('')}
+        </div>
+      `
+    )
+    .join('');
+  const submitWrap = document.createElement('div');
+  submitWrap.className = 'actions';
+  submitWrap.innerHTML = '<button id="quizScoreSubmit">Submit Answers</button><div id="quizScoreResult" class="status"></div>';
+  outputEl.appendChild(submitWrap);
+  const submitBtn = outputEl.querySelector('#quizScoreSubmit');
+  const resultEl = outputEl.querySelector('#quizScoreResult');
+  if (submitBtn && resultEl) {
+    submitBtn.addEventListener('click', () => {
+      const selected = aiQuizQuestions.map((q, idx) => {
+        const checked = outputEl.querySelector(`input[name="quiz-q-${idx}"]:checked`);
+        if (!checked) return { optIdx: -1, value: '' };
+        const optIdx = Number(checked.value);
+        const value = q.options[optIdx] || '';
+        return { optIdx, value };
+      });
+      const unanswered = selected.filter((x) => x.optIdx < 0).length;
+      if (unanswered) {
+        resultEl.textContent = `Please answer all questions (${unanswered} remaining).`;
+        return;
+      }
+
+      [...outputEl.querySelectorAll('.quiz-option-label')].forEach((el) => {
+        el.classList.remove('correct', 'wrong');
+      });
+
+      let correct = 0;
+      aiQuizQuestions.forEach((q, idx) => {
+        const picked = selected[idx];
+        const answerIdx = q.options.findIndex((o) => o === q.answer);
+        const pickedLabel = outputEl.querySelector(
+          `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${picked.optIdx}"]`
+        );
+        const answerLabel = outputEl.querySelector(
+          `.quiz-option-label[data-q-index="${idx}"][data-opt-index="${answerIdx}"]`
+        );
+
+        if (answerLabel) answerLabel.classList.add('correct');
+        if (picked.optIdx !== answerIdx && pickedLabel) pickedLabel.classList.add('wrong');
+        if (picked.value === q.answer) correct += 1;
+      });
+      const pct = Math.round((correct / aiQuizQuestions.length) * 100);
+      resultEl.textContent = `Score: ${correct}/${aiQuizQuestions.length} (${pct}%)`;
+      awardXP(Math.max(5, correct), 'quiz completed');
+    });
+  }
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function requestSummaryFollowup(question) {
+  try {
+    const data = await apiPost('/textbook/summary/chat', {
+      summary: summaryLatest,
+      sourceText: summarySourceText,
+      question,
+      history: summaryChatHistory.slice(-8)
+    });
+    const answer = String(data?.answer || '').trim();
+    if (answer) return answer;
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (!/not found/i.test(msg)) {
+      throw err;
+    }
+  }
+
+  // Fallback for older server builds that do not have /textbook/summary/chat.
+  const fallbackPrompt =
+    `Answer the follow-up question using the summary and source context.\n` +
+    `Summary:\n${summaryLatest}\n\n` +
+    `Source text excerpt:\n${String(summarySourceText || '').slice(0, 6000)}\n\n` +
+    `Recent chat:\n${summaryChatHistory
+      .slice(-6)
+      .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.text}`)
+      .join('\n')}\n\n` +
+    `Question: ${question}\n\n` +
+    `Give a concise plain-text answer.`;
+  const data = await apiPost('/textbook/summary', { text: fallbackPrompt });
+  return String(data?.summary || '').trim();
+}
+
+function renderSummaryChatThread() {
+  if (!els.summaryChatThread) return;
+  if (!summaryChatHistory.length) {
+    els.summaryChatThread.innerHTML = '<p class="sub">Ask a question about the generated summary.</p>';
+    return;
+  }
+  els.summaryChatThread.innerHTML = summaryChatHistory
+    .map(
+      (m) =>
+        `<div class="chat-row ${m.role === 'user' ? 'user' : 'assistant'}">
+          <div class="chat-bubble">${escapeHtml(m.text || '')}</div>
+        </div>`
+    )
+    .join('');
+  els.summaryChatThread.scrollTop = els.summaryChatThread.scrollHeight;
+}
+
+function initAiTools() {
+  if (els.summaryGenerate) {
+    els.summaryGenerate.addEventListener('click', async () => {
+      try {
+        const text = await getAiSourceText({
+          fileInput: els.summarySourceFile,
+          urlInput: els.summarySourceUrl,
+          statusEl: els.summaryStatus
+        });
+        els.summaryStatus.textContent = 'Generating summary...';
+        const data = await apiPost('/textbook/summary', { text });
+        const summary = String(data?.summary || '').trim() || makeSummary(text);
+        els.summaryOutput.innerHTML = `<h4>Summary</h4><p>${summary}</p>`;
+        els.summaryStatus.textContent = 'Summary ready.';
+        summarySourceText = text;
+        summaryLatest = summary;
+        summaryChatHistory = [];
+        if (els.summaryChatPanel) {
+          els.summaryChatPanel.classList.remove('hidden');
+        }
+        renderSummaryChatThread();
+      } catch (err) {
+        const msg = String(err?.message || err).slice(0, 160);
+        els.summaryStatus.textContent = `Summary failed: ${msg}`;
+      }
+    });
+  }
+
+  if (els.summaryChatSend) {
+    els.summaryChatSend.addEventListener('click', async () => {
+      const question = String(els.summaryChatInput?.value || '').trim();
+      if (!question) return;
+      if (!summaryLatest) {
+        els.summaryStatus.textContent = 'Generate a summary first.';
+        return;
+      }
+      summaryChatHistory.push({ role: 'user', text: question });
+      renderSummaryChatThread();
+      els.summaryChatInput.value = '';
+      try {
+        els.summaryStatus.textContent = 'Generating follow-up response...';
+        const answer = await requestSummaryFollowup(question);
+        if (answer) {
+          summaryChatHistory.push({ role: 'assistant', text: answer });
+        } else {
+          summaryChatHistory.push({ role: 'assistant', text: 'I could not generate an answer.' });
+        }
+        renderSummaryChatThread();
+        els.summaryStatus.textContent = 'Follow-up answer ready.';
+      } catch (err) {
+        const msg = String(err?.message || err).slice(0, 160);
+        els.summaryStatus.textContent = `Follow-up failed: ${msg}`;
+      }
+    });
+  }
+  if (els.summaryChatInput && els.summaryChatSend) {
+    els.summaryChatInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        els.summaryChatSend.click();
+      }
+    });
+  }
+
+  if (els.quizGenerate) {
+    els.quizGenerate.addEventListener('click', async () => {
+      try {
+        const text = await getAiSourceText({
+          fileInput: els.quizSourceFile,
+          urlInput: els.quizSourceUrl,
+          statusEl: els.quizStatus
+        });
+        els.quizStatus.textContent = 'Generating 10-question quiz...';
+        try {
+          const data = await apiPost('/textbook/quiz-set', { text, count: 10 });
+          renderAiQuizSet(data?.questions || [], els.quizToolOutput);
+          els.quizStatus.textContent = 'Quiz ready. Answer all questions, then submit.';
+        } catch (err) {
+          const msg = String(err?.message || err);
+          if (/not found/i.test(msg)) {
+            const fallback = [];
+            for (let i = 0; i < 10; i += 1) {
+              const q = makeQuiz(text);
+              if (q && typeof q !== 'string') fallback.push(q);
+            }
+            renderAiQuizSet(fallback, els.quizToolOutput);
+            els.quizStatus.textContent = 'Quiz ready (fallback). Restart server to enable Gemini quiz-set endpoint.';
+          } else {
+            throw err;
+          }
+        }
+      } catch (err) {
+        const msg = String(err?.message || err).slice(0, 160);
+        els.quizStatus.textContent = `Quiz failed: ${msg}`;
+      }
+    });
+  }
+}
+
+
 function initTextbook() {
   els.textbookFile.addEventListener('change', () => {
     const file = els.textbookFile.files?.[0];
@@ -1525,6 +1990,10 @@ function initTextbook() {
     textbookPages = [];
     textbookChapters = [];
     textbookBookmarkChapters = [];
+    textbookPageCount = 0;
+    ttsAnchorPage = 1;
+    ttsScopeRadius = 2;
+    ttsCurrentRange = { start: 1, end: 1 };
     els.textbookName.value = file.name.replace(/\.pdf$/i, '');
     els.textbookStatus.textContent = `${file.name} loaded locally.`;
     els.chapterList.innerHTML = '<li class="drag-item">AI is checking for chapters/chapter titles...</li>';
@@ -1533,6 +2002,7 @@ function initTextbook() {
       .then(async (buf) => {
         textbookPdfBuffer = buf;
         const pdfData = await extractPdfData(file);
+        textbookPageCount = Array.isArray(pdfData?.pages) ? pdfData.pages.length : 0;
         textbookBookmarkChapters = Array.isArray(pdfData?.outlineChapters)
           ? pdfData.outlineChapters
           : [];
@@ -1544,6 +2014,7 @@ function initTextbook() {
           renderChapterList([{ title: 'Chapter 1', page: 1 }]);
           els.textbookStatus.textContent = 'No embedded text found. Running OCR to read this PDF...';
           const pdf = await buildPdfDocFromBuffer();
+          textbookPageCount = Number(pdf?.numPages || textbookPageCount || 0);
           const scanEnd = Math.min(Number(pdf?.numPages || 1), 12);
           await ocrPdfRange(1, scanEnd, 'chapter detection');
           const ocrText = textbookOcrPages.map((p) => p.text).join('\n').trim();
@@ -1616,32 +2087,34 @@ function initTextbook() {
       });
   });
 
-  els.chapterQuiz.addEventListener('click', () => {
-    const text = els.textbookText.value.trim();
-    if (!text) return;
-    const renderQuiz = (quiz) => {
-      if (typeof quiz === 'string') {
-        els.quizOutput.textContent = quiz;
-        return;
-      }
-      els.quizOutput.innerHTML = `<h4>Quiz</h4><p>${quiz.q}</p>${quiz.options
-        .map((o) => `<button class="quiz-opt" data-correct="${o === quiz.answer}">${o}</button>`)
-        .join('')}`;
-      [...els.quizOutput.querySelectorAll('.quiz-opt')].forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const ok = btn.dataset.correct === 'true';
-          btn.style.background = ok ? '#d8f2da' : '#ffd8d8';
-          if (ok) awardXP(5, 'quiz correct');
+  if (els.chapterQuiz) {
+    els.chapterQuiz.addEventListener('click', () => {
+      const text = els.textbookText.value.trim();
+      if (!text) return;
+      const renderQuiz = (quiz) => {
+        if (typeof quiz === 'string') {
+          els.quizOutput.textContent = quiz;
+          return;
+        }
+        els.quizOutput.innerHTML = `<h4>Quiz</h4><p>${quiz.q}</p>${quiz.options
+          .map((o) => `<button class="quiz-opt" data-correct="${o === quiz.answer}">${o}</button>`)
+          .join('')}`;
+        [...els.quizOutput.querySelectorAll('.quiz-opt')].forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const ok = btn.dataset.correct === 'true';
+            btn.style.background = ok ? '#d8f2da' : '#ffd8d8';
+            if (ok) awardXP(5, 'quiz correct');
+          });
         });
-      });
-    };
-    apiPost('/textbook/quiz', { text })
-      .then((data) => {
-        const quiz = data.quiz || makeQuiz(text);
-        renderQuiz(quiz);
-      })
-      .catch(() => renderQuiz(makeQuiz(text)));
-  });
+      };
+      apiPost('/textbook/quiz', { text })
+        .then((data) => {
+          const quiz = data.quiz || makeQuiz(text);
+          renderQuiz(quiz);
+        })
+        .catch(() => renderQuiz(makeQuiz(text)));
+    });
+  }
 }
 
 async function loadVoices() {
@@ -1771,6 +2244,7 @@ function boot() {
   });
 
   initToolbar();
+  initAiTools();
   initWorkspaceDnD();
   initVideo();
   initSharingAndExport();

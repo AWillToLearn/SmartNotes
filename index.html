@@ -11,6 +11,8 @@
     <div class="brand">SmartNotes</div>
     <nav class="nav">
       <button class="nav-btn active" data-view="home">Home</button>
+      <button class="nav-btn" data-view="aiSummaryTool">AI Summary</button>
+      <button class="nav-btn" data-view="aiQuizTool">AI Quiz</button>
       <button class="nav-btn" data-view="workspace">Workspace</button>
       <button class="nav-btn" data-view="textbook">Textbook</button>
       <button class="nav-btn" data-view="garden">Garden</button>
@@ -30,7 +32,7 @@
         </article>
         <article class="card">
           <h3>Textbook Notes</h3>
-          <p>Import a textbook PDF, annotate, run text-to-speech, and generate chapter summaries/quizzes.</p>
+          <p>Import a textbook PDF, annotate, run text-to-speech, and generate chapter summaries.</p>
           <button data-go="textbook">Open Textbook</button>
         </article>
         <article class="card">
@@ -38,6 +40,71 @@
           <p>Live-note mode is scaffolded here and ready for real audio/video transcription integration.</p>
           <button data-go="workspace">Start Live Notes</button>
         </article>
+      </div>
+      <div class="cards" style="margin-top:14px;">
+        <article class="card">
+          <h3>AI Summary</h3>
+          <p>Generate a concise summary from a URL or uploaded file.</p>
+          <button data-go="aiSummaryTool">Open AI Summary</button>
+        </article>
+        <article class="card">
+          <h3>AI Quiz</h3>
+          <p>Generate a quiz from a URL or uploaded file.</p>
+          <button data-go="aiQuizTool">Open AI Quiz</button>
+        </article>
+      </div>
+    </section>
+
+    <section id="aiSummaryTool" class="view">
+      <h2>AI Summary</h2>
+      <p class="sub">Upload a file or paste a URL (video/article/text) for Gemini summary generation.</p>
+      <div class="card">
+        <label class="input-row">Content URL
+          <input id="summarySourceUrl" type="url" placeholder="https://..." />
+        </label>
+        <label class="file-btn">Upload File
+          <input id="summarySourceFile" type="file" accept=".txt,.md,.pdf,.rtf,.csv,.json" hidden />
+        </label>
+        <div class="actions" style="margin-top:10px;">
+          <button id="summaryGenerate">Generate Summary</button>
+        </div>
+        <div id="summaryStatus" class="status">Provide a URL or upload a file.</div>
+        <div id="summaryOutput" class="quiz-output"></div>
+        <div id="summaryChatPanel" class="hidden" style="margin-top:10px;">
+          <h3>Ask Follow-Up Questions</h3>
+          <div id="summaryChatThread" class="quiz-output" style="max-height: 240px;"></div>
+          <label class="input-row" style="margin-top:8px;">Your Question
+            <input id="summaryChatInput" type="text" placeholder="Ask about this summary..." />
+          </label>
+          <div class="actions">
+            <button id="summaryChatSend">Send</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="aiQuizTool" class="view">
+      <h2>AI Quiz</h2>
+      <p class="sub">Upload a file or paste a URL (video/article/text) for Gemini quiz generation.</p>
+      <div class="ai-quiz-grid">
+        <aside class="panel left quiz-sidebar">
+          <h3>Quiz Source</h3>
+          <label class="input-row">Content URL
+            <input id="quizSourceUrl" type="url" placeholder="https://..." />
+          </label>
+          <label class="file-btn">Upload File
+            <input id="quizSourceFile" type="file" accept=".txt,.md,.pdf,.rtf,.csv,.json" hidden />
+          </label>
+          <div class="actions" style="margin-top:10px;">
+            <button id="quizGenerate">Generate Quiz</button>
+          </div>
+          <div id="quizStatus" class="status">Provide a URL or upload a file.</div>
+        </aside>
+
+        <section class="panel quiz-main">
+          <h3>Quiz</h3>
+          <div id="quizToolOutput" class="ai-quiz-output"></div>
+        </section>
       </div>
     </section>
 
@@ -159,7 +226,6 @@
             <button id="addComment">Comment</button>
             <button id="drawMode">Draw Mode</button>
             <button id="chapterSummary">AI Summary</button>
-            <button id="chapterQuiz">AI Quiz</button>
           </div>
           <h2>TTS</h2>
           <div class="tts-controls">
