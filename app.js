@@ -43,6 +43,8 @@
   exportPdf: document.getElementById('exportPdf'),
   pageCount: document.getElementById('pageCount'),
   saveState: document.getElementById('saveState'),
+  themeToggle: document.getElementById('themeToggle'),
+  darkModeToggle: document.getElementById('darkModeToggle'),
   publicLinkDefault: document.getElementById('publicLinkDefault'),
   textbookFile: document.getElementById('textbookFile'),
   textbookName: document.getElementById('textbookName'),
@@ -121,6 +123,10 @@ const shopItems = [
 ];
 
 const DOC_PAGE_HEIGHT = 1120;
+const DEFAULT_SETTINGS = {
+  publicByDefault: false,
+  theme: 'light'
+};
 
 function getClientId() {
   let id = localStorage.getItem(STORAGE_KEYS.CLIENT_ID);
@@ -142,6 +148,30 @@ function loadJSON(key, fallback) {
 
 function saveJSON(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+function getSettings() {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...loadJSON(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS)
+  };
+}
+
+function saveSettings(patch) {
+  const next = { ...getSettings(), ...(patch || {}) };
+  saveJSON(STORAGE_KEYS.SETTINGS, next);
+  return next;
+}
+
+function applyTheme(themeName) {
+  const theme = themeName === 'dark' ? 'dark' : 'light';
+  document.body.dataset.theme = theme;
+  if (els.darkModeToggle) {
+    els.darkModeToggle.checked = theme === 'dark';
+  }
+  if (els.themeToggle) {
+    els.themeToggle.textContent = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+  }
 }
 
 function setView(id) {
@@ -787,7 +817,7 @@ function syncWorkspaceState() {
     state: {
       content: els.editor.innerHTML,
       versions: loadJSON(STORAGE_KEYS.VERSIONS, []),
-      settings: loadJSON(STORAGE_KEYS.SETTINGS, { publicByDefault: false })
+      settings: getSettings()
     }
   };
   apiPost('/state/workspace', payload).catch(() => {
@@ -822,8 +852,9 @@ async function hydrateRemoteState() {
         saveJSON(STORAGE_KEYS.VERSIONS, workspace.state.versions);
       }
       if (workspace.state.settings) {
-        saveJSON(STORAGE_KEYS.SETTINGS, workspace.state.settings);
-        els.publicLinkDefault.checked = !!workspace.state.settings.publicByDefault;
+        const merged = saveSettings(workspace.state.settings);
+        els.publicLinkDefault.checked = !!merged.publicByDefault;
+        applyTheme(merged.theme);
       }
     }
   } catch {
@@ -1211,7 +1242,7 @@ function initSharingAndExport() {
   });
 
   els.shareDoc.addEventListener('click', async () => {
-    const publicDefault = loadJSON(STORAGE_KEYS.SETTINGS, { publicByDefault: false }).publicByDefault;
+    const publicDefault = getSettings().publicByDefault;
     const linkType = publicDefault ? 'public' : 'private';
     const token = crypto.randomUUID().slice(0, 8);
     const fakeUrl = `${location.origin}${location.pathname}?doc=${token}&access=${linkType}`;
@@ -1230,9 +1261,28 @@ function initSharingAndExport() {
   });
 
   els.publicLinkDefault.addEventListener('change', () => {
-    saveJSON(STORAGE_KEYS.SETTINGS, { publicByDefault: els.publicLinkDefault.checked });
+    saveSettings({ publicByDefault: els.publicLinkDefault.checked });
     syncWorkspaceState();
   });
+
+  if (els.themeToggle) {
+    els.themeToggle.addEventListener('click', () => {
+      const current = getSettings();
+      const nextTheme = current.theme === 'dark' ? 'light' : 'dark';
+      saveSettings({ theme: nextTheme });
+      applyTheme(nextTheme);
+      syncWorkspaceState();
+    });
+  }
+
+  if (els.darkModeToggle) {
+    els.darkModeToggle.addEventListener('change', () => {
+      const nextTheme = els.darkModeToggle.checked ? 'dark' : 'light';
+      saveSettings({ theme: nextTheme });
+      applyTheme(nextTheme);
+      syncWorkspaceState();
+    });
+  }
 }
 
 function normalizeChapterEntries(entries, maxPage) {
@@ -2229,8 +2279,9 @@ function renderGarden() {
 function boot() {
   const savedDoc = localStorage.getItem(STORAGE_KEYS.DOC);
   els.editor.innerHTML = savedDoc || '<h2>Untitled Workspace</h2><p>Drag key points here.</p>';
-  const settings = loadJSON(STORAGE_KEYS.SETTINGS, { publicByDefault: false });
+  const settings = getSettings();
   els.publicLinkDefault.checked = settings.publicByDefault;
+  applyTheme(settings.theme);
   const textbook = loadJSON(STORAGE_KEYS.TEXTBOOK, { name: 'Textbook 1' });
   els.textbookName.value = textbook.name || 'Textbook 1';
 
