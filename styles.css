@@ -6,6 +6,7 @@
   --line: #d7d2c8;
   --accent: #d46f32;
   --accent-soft: #f2dfce;
+  --page-h: 1120px;
 }
 
 * { box-sizing: border-box; }
@@ -66,6 +67,7 @@ h1, h2, h3 { margin-top: 0; }
   display: grid;
   grid-template-columns: 280px 1fr 300px;
   gap: 12px;
+  align-items: start;
 }
 .panel, .editor-wrap, .textbook-viewer {
   border: 1px solid var(--line);
@@ -74,6 +76,30 @@ h1, h2, h3 { margin-top: 0; }
   padding: 12px;
 }
 .panel { min-height: 70vh; }
+.workspace-grid > .panel.left,
+.workspace-grid > .panel.right {
+  position: sticky;
+  top: 72px;
+  max-height: calc(100vh - 88px);
+  overflow-y: auto;
+}
+.textbook-grid > .panel.left,
+.textbook-grid > .panel.right {
+  position: sticky;
+  top: 72px;
+  height: calc(100vh - 88px);
+  overflow-y: auto;
+}
+#textbook .textbook-grid > .panel.left {
+  display: flex;
+  flex-direction: column;
+}
+.textbook-grid {
+  min-height: calc(100vh - 88px);
+}
+.textbook-grid > .textbook-viewer {
+  height: calc(100vh - 88px);
+}
 .panel-head { display: flex; justify-content: space-between; align-items: center; }
 
 .input-row { display: grid; gap: 6px; margin-bottom: 10px; }
@@ -87,11 +113,74 @@ input, select, textarea {
 .status { font-size: 0.9rem; color: var(--muted); margin-bottom: 10px; }
 
 .drag-list, .chapter-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.chapter-box {
+  flex: 1 1 auto;
+  min-height: 260px;
+  max-height: none;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffdf9;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.chapter-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.chapter-jump {
+  text-align: left;
+  width: 100%;
+}
+.chapter-tts {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.chapter-box::-webkit-scrollbar {
+  width: 10px;
+}
+.chapter-box::-webkit-scrollbar-thumb {
+  background: #d8c9b8;
+  border-radius: 8px;
+}
+.chapter-box::-webkit-scrollbar-track {
+  background: #f4eee5;
+  border-radius: 8px;
+}
+.suggestion-box {
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffdf9;
+}
+.suggestion-box::-webkit-scrollbar {
+  width: 10px;
+}
+.suggestion-box::-webkit-scrollbar-thumb {
+  background: #d8c9b8;
+  border-radius: 8px;
+}
+.suggestion-box::-webkit-scrollbar-track {
+  background: #f4eee5;
+  border-radius: 8px;
+}
 .drag-item {
   border: 1px dashed var(--line);
   border-radius: 8px;
   padding: 8px;
   background: #fffcf8;
+}
+.drag-item.active {
+  border-color: var(--accent);
+  background: #ffe9da;
 }
 
 .editor-toolbar, .editor-actions, .textbook-tools, .tts-controls {
@@ -102,10 +191,60 @@ input, select, textarea {
 }
 .editor {
   border: 1px dashed var(--line);
-  min-height: 55vh;
-  padding: 12px;
+  width: min(100%, 900px);
+  min-height: var(--page-h);
+  padding: 72px 84px;
   border-radius: 10px;
-  background: #fffefc;
+  background:
+    linear-gradient(
+      to bottom,
+      #fffefc calc(var(--page-h) - 1px),
+      #e6e1d7 calc(var(--page-h) - 1px),
+      #e6e1d7 var(--page-h)
+    )
+    0 0 / 100% var(--page-h) repeat-y;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.05);
+}
+.note-block {
+  position: relative;
+  border: 1px solid #d9d1c5;
+  border-radius: 10px;
+  background: #fff;
+  margin: 12px 0;
+  padding: 14px 44px 14px 14px;
+}
+.note-block.dragging {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.note-content[contenteditable="true"] {
+  outline: 2px solid #f0b58d;
+  border-radius: 8px;
+  padding: 4px;
+}
+.note-content img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 8px auto;
+}
+.note-content figcaption {
+  font-size: 0.9rem;
+  color: #5f625f;
+}
+.note-handle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
 }
 .version-panel {
   margin-top: 10px;
@@ -117,8 +256,17 @@ input, select, textarea {
 .hidden { display: none; }
 
 #videoPlayer { width: 100%; border-radius: 8px; background: #000; }
-#pdfFrame { width: 100%; height: 42vh; border: 1px solid var(--line); border-radius: 10px; }
-#textbookText { min-height: 20vh; }
+#youtubePlayer { width: 100%; height: 220px; border: 0; border-radius: 8px; display: none; background: #000; }
+#pdfFrame { width: 100%; height: calc(100vh - 160px); border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+#textbookText { min-height: 22vh; }
+#textbook .panel.left .input-row:last-of-type {
+  margin-top: auto;
+}
+.textbook-viewer {
+  position: relative;
+  height: calc(100vh - 88px);
+  overflow-y: auto;
+}
 .annotation-output, .quiz-output {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -128,6 +276,30 @@ input, select, textarea {
   overflow: auto;
   background: #fffdf9;
 }
+.annotation-overlay {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  display: grid;
+  gap: 8px;
+  z-index: 5;
+  pointer-events: none;
+}
+.annotation-toast {
+  background: rgba(26, 26, 26, 0.9);
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 8px;
+  max-width: 320px;
+  font-size: 0.85rem;
+  animation: toastFade 3.2s ease forwards;
+}
+@keyframes toastFade {
+  0% { opacity: 0; transform: translateY(-6px); }
+  10% { opacity: 1; transform: translateY(0); }
+  78% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-8px); }
+}
 
 .garden-stats { display: flex; gap: 16px; margin-bottom: 12px; }
 .toggle-row { display: flex; gap: 8px; align-items: center; }
@@ -135,5 +307,22 @@ input, select, textarea {
 @media (max-width: 1000px) {
   .workspace-grid, .textbook-grid { grid-template-columns: 1fr; }
   .panel { min-height: auto; }
-  .editor { min-height: 40vh; }
+  .workspace-grid > .panel.left,
+  .workspace-grid > .panel.right {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+  .textbook-grid > .panel.left,
+  .textbook-grid > .panel.right {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+  .textbook-viewer {
+    max-height: none;
+    overflow: visible;
+  }
+  #pdfFrame { height: 60vh; }
+  .editor { width: 100%; padding: 28px; min-height: 70vh; }
 }

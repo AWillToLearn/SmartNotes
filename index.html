@@ -57,7 +57,9 @@
           </div>
           <div id="aiStatus" class="status">Idle</div>
           <h3>Key Points (drag into workspace)</h3>
-          <ul id="keyPointList" class="drag-list"></ul>
+          <div class="suggestion-box">
+            <ul id="keyPointList" class="drag-list"></ul>
+          </div>
         </aside>
 
         <section class="editor-wrap">
@@ -83,6 +85,7 @@
             <button id="showVersions">Version History</button>
             <button id="shareDoc">Share</button>
             <button id="exportPdf">Export .pdf</button>
+            <span id="pageCount">Page 1</span>
             <span id="saveState">Not saved</span>
           </div>
           <div id="versionPanel" class="version-panel hidden"></div>
@@ -94,7 +97,18 @@
             <button id="toggleVideoPanel">Collapse</button>
           </div>
           <video id="videoPlayer" controls playsinline></video>
+          <iframe
+            id="youtubePlayer"
+            title="YouTube Player"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen
+          ></iframe>
           <div class="video-controls">
+            <button id="jumpBack10">-10s</button>
+            <button id="jumpBack5">-5s</button>
+            <button id="playPauseVideo">Play/Pause</button>
+            <button id="jumpFwd5">+5s</button>
+            <button id="jumpFwd10">+10s</button>
             <label>Speed
               <select id="playbackRate">
                 <option>0.5</option>
@@ -104,8 +118,10 @@
                 <option>2</option>
               </select>
             </label>
+            <button id="toggleCaptions">Captions</button>
             <button id="captureFrame">Copy Screenshot</button>
           </div>
+          <div id="currentKeyPoint" class="status">Current key point: none</div>
           <div id="videoMsg" class="status">No video loaded.</div>
         </aside>
       </div>
@@ -122,12 +138,21 @@
             <input id="textbookName" placeholder="Textbook 1" />
           </label>
           <h3>Chapters</h3>
-          <ul id="chapterList" class="chapter-list"></ul>
+          <div class="chapter-box">
+            <ul id="chapterList" class="chapter-list"></ul>
+          </div>
+          <label class="input-row">Chapter Text
+            <textarea id="textbookText" placeholder="Paste chapter text here for TTS/Summary/Quiz workflows."></textarea>
+          </label>
         </aside>
 
         <section class="textbook-viewer">
           <iframe id="pdfFrame" title="PDF Reader"></iframe>
-          <textarea id="textbookText" placeholder="Paste chapter text here for TTS/Summary/Quiz workflows."></textarea>
+          <div id="annotationOverlay" class="annotation-overlay"></div>
+        </section>
+
+        <aside class="panel right">
+          <h2>Tools</h2>
           <div class="textbook-tools">
             <button id="highlightSel">Highlight</button>
             <button id="underlineSel">Underline</button>
@@ -136,12 +161,9 @@
             <button id="chapterSummary">AI Summary</button>
             <button id="chapterQuiz">AI Quiz</button>
           </div>
-          <div id="annotationOutput" class="annotation-output"></div>
-        </section>
-
-        <aside class="panel right">
           <h2>TTS</h2>
           <div class="tts-controls">
+            <button id="ttsLoadVoices">Load Voices</button>
             <button id="ttsPlay">Play</button>
             <button id="ttsPause">Pause</button>
             <button id="ttsStop">Stop</button>
@@ -177,7 +199,7 @@
         <input id="publicLinkDefault" type="checkbox" />
         Default shared documents to Public
       </label>
-      <p class="sub">All data stays in local browser storage in this prototype.</p>
+      <p class="sub">TTS keys are loaded from server `.env`.</p>
     </section>
   </main>
 
@@ -185,6 +207,7 @@
     <li class="drag-item" draggable="true"></li>
   </template>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
